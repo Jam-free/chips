@@ -20,9 +20,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 import { Screenshot, ChipResult, PromptTemplate } from '@/types';
 import { QRCodeButton } from '@/components/qrcode-button';
+
+interface UploadProgress {
+  fileName: string;
+  progress: number;
+  status: 'pending' | 'uploading' | 'success' | 'error';
+  error?: string;
+}
 
 export default function Home() {
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
@@ -33,6 +40,10 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState<Record<string, boolean>>({});
   const [apiKey, setApiKey] = useState('');
   const [provider, setProvider] = useState<'glm' | 'minimax'>('glm');
+
+  // 上传状态
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Prompt编辑状态
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -114,26 +125,105 @@ export default function Home() {
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
-    try {
-      const newScreenshots: Screenshot[] = [];
+    // 检查文件大小
+    const MAX_FILE_SIZE = 3.5 * 1024 * 1024; // 3.5MB
+    const oversizedFiles: string[] = [];
 
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].size > MAX_FILE_SIZE) {
+        oversizedFiles.push(`${files[i].name} (${(files[i].size / 1024 / 1024).toFixed(2)}MB)`);
+      }
+    }
+
+    if (oversizedFiles.length > 0) {
+      alert(`⚠️ 以下文件超过3.5MB限制，无法上传：\n${oversizedFiles.join('\n')}\n\n建议：压缩图片或选择较小的文件`);
+      return;
+    }
+
+    setIsUploading(true);
+    const newScreenshots: Screenshot[] = [];
+
+    // 初始化进度
+    const initialProgress: UploadProgress[] = Array.from(files).map(file => ({
+      fileName: file.name,
+      progress: 0,
+      status: 'pending' as const
+    }));
+    setUploadProgress(initialProgress);
+
+    try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const formData = new FormData();
-        formData.append('file', file);
 
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
+        // 更新状态为上传中
+        setUploadProgress(prev => prev.map((p, idx) =>
+          idx === i ? { ...p, status: 'uploading', progress: 10 } : p
+        ));
 
-        const data = await res.json();
-        if (data.success) {
-          console.log('Upload success:', data.screenshot);
-          newScreenshots.push(data.screenshot);
-        } else {
-          console.error('Upload failed:', data.error);
-          alert(`文件上传失败: ${data.error}`);
+        try {
+          // 使用AbortController实现超时控制
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+
+          const formData = new FormData();
+          formData.append('file', file);
+
+          // 模拟进度更新
+          const progressInterval = setInterval(() => {
+            setUploadProgress(prev => {
+              const newProgress = [...prev];
+              if (newProgress[i].progress < 80) {
+                newProgress[i] = { ...newProgress[i], progress: newProgress[i].progress + 10 };
+              }
+              return newProgress;
+            });
+          }, 500);
+
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+          clearInterval(progressInterval);
+
+          const data = await res.json();
+
+          if (data.success) {
+            console.log('Upload success:', data.screenshot);
+            newScreenshots.push(data.screenshot);
+
+            // 更新为成功
+            setUploadProgress(prev => prev.map((p, idx) =>
+              idx === i ? { ...p, status: 'success', progress: 100 } : p
+            ));
+          } else {
+            const errorMsg = data.error || '上传失败';
+            console.error('Upload failed:', errorMsg);
+
+            // 更新为失败
+            setUploadProgress(prev => prev.map((p, idx) =>
+              idx === i ? { ...p, status: 'error', error: errorMsg } : p
+            ));
+          }
+        } catch (error: unknown) {
+          let errorMsg = '上传失败';
+
+          if (error instanceof Error) {
+            if (error.name === 'AbortError') {
+              errorMsg = '上传超时（30秒），请检查网络或压缩图片后重试';
+            } else {
+              errorMsg = error.message;
+            }
+          }
+
+          console.error('Upload error:', error);
+
+          // 更新为失败
+          setUploadProgress(prev => prev.map((p, idx) =>
+            idx === i ? { ...p, status: 'error', error: errorMsg } : p
+          ));
         }
       }
 
@@ -143,13 +233,27 @@ export default function Home() {
 
         // 自动选中第一个新上传的截图
         setSelectedIndexes([screenshots.length]);
-
-        // 提示用户
-        alert(`✅ 成功上传 ${newScreenshots.length} 张截图！`);
       }
+
+      // 显示总结
+      const successCount = newScreenshots.length;
+      const failCount = files.length - successCount;
+
+      setTimeout(() => {
+        if (failCount === 0) {
+          alert(`✅ 成功上传 ${successCount} 张截图！`);
+        } else {
+          alert(`⚠️ 上传完成：成功 ${successCount} 张，失败 ${failCount} 张`);
+        }
+        setIsUploading(false);
+        setUploadProgress([]);
+      }, 1000);
+
     } catch (error) {
       console.error('Upload error:', error);
       alert('上传失败，请重试');
+      setIsUploading(false);
+      setUploadProgress([]);
     }
   };
 
@@ -258,6 +362,59 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* 上传进度对话框 */}
+      {isUploading && uploadProgress.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Loader2 className="h-6 w-6 text-blue-600 animate-spin" />
+              <h3 className="text-lg font-semibold text-slate-900">上传中...</h3>
+            </div>
+
+            <div className="space-y-3 max-h-60 overflow-y-auto">
+              {uploadProgress.map((progress, idx) => (
+                <div key={idx} className="bg-slate-50 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-slate-700 truncate flex-1" title={progress.fileName}>
+                      {progress.fileName}
+                    </span>
+                    <span className="text-xs text-slate-500 ml-2">
+                      {progress.status === 'success' && '✅'}
+                      {progress.status === 'error' && '❌'}
+                      {progress.status === 'uploading' && `${progress.progress}%`}
+                    </span>
+                  </div>
+
+                  {/* 进度条 */}
+                  {progress.status === 'uploading' && (
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${progress.progress}%` }}
+                      />
+                    </div>
+                  )}
+
+                  {/* 错误提示 */}
+                  {progress.status === 'error' && (
+                    <div className="flex items-start gap-2 mt-2 text-red-600 text-xs">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      <span>{progress.error || '上传失败'}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-slate-200">
+              <p className="text-xs text-slate-500 text-center">
+                正在上传图片，请稍候...
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 顶部导航栏 - 简洁版 */}
       <header className="h-16 border-b bg-card fixed top-0 w-full z-50">
         <div className="container mx-auto px-4 h-full">

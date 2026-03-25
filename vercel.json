@@ -1,3 +1,9 @@
 {
-  "regions": ["sin1"]
+  "regions": ["sin1"],
+  "functions": {
+    "app/api/**/*.ts": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  }
 }
