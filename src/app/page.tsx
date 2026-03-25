@@ -611,6 +611,59 @@ export default function Home() {
     }
   };
 
+  const handleDebug = async (screenshotId: string) => {
+    if (!apiKey.trim()) {
+      alert('⚠️ 调试功能需要配置API Key\n\n请先在设置中配置API Key');
+      return;
+    }
+
+    console.log('[handleDebug] Starting debug for screenshot:', screenshotId);
+    alert('🔍 正在调试...\n\n请查看浏览器控制台（F12）查看详细信息');
+
+    try {
+      const res = await fetch('/api/debug', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          screenshotId,
+          apiKey,
+          provider
+        }),
+      });
+
+      const data = await res.json();
+
+      console.log('[handleDebug] ========== Debug Response ==========');
+      console.log('[handleDebug] Full response:', data);
+
+      if (data.success) {
+        const debug = data.debug;
+        console.log('[handleDebug] ========== Debug Info ==========');
+        console.log('[handleDebug] Message:', debug.message);
+        console.log('[handleDebug] Provider:', debug.provider);
+        console.log('[handleDebug] Duration:', debug.duration);
+        console.log('[handleDebug] Chips:', debug.chips);
+        console.log('[handleDebug] Chips Count:', debug.chipsCount);
+        console.log('[handleDebug] Screen Understanding:', debug.screenUnderstanding);
+        console.log('[handleDebug] Prompt Length:', debug.promptLength);
+        console.log('[handleDebug] Image Size:', debug.imageSize);
+
+        if (debug.error) {
+          console.error('[handleDebug] Error:', debug.error);
+          console.error('[handleDebug] Error Details:', debug.errorDetails);
+        }
+
+        alert(`🔍 调试完成\n\n${debug.message}\n\n请查看控制台（F12）查看详细信息`);
+      } else {
+        console.error('[handleDebug] Debug failed:', data.error);
+        alert(`❌ 调试失败: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('[handleDebug] Request failed:', error);
+      alert('❌ 调试失败，请检查网络');
+    }
+  };
+
   const selectScreenshot = (index: number) => {
     setSelectedIndexes([index]);
   };
@@ -710,6 +763,23 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2">
+              {/* 调试按钮 */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => {
+                  if (screenshots.length === 0) {
+                    alert('请先上传截图');
+                    return;
+                  }
+                  handleDebug(screenshots[0].id);
+                }}
+                disabled={screenshots.length === 0}
+              >
+                🔍 调试
+              </Button>
+
               {/* Prompt管理按钮 */}
               <Dialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen}>
                 <DialogTrigger asChild>
