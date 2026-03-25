@@ -129,16 +129,27 @@ export default function Home() {
 
         const data = await res.json();
         if (data.success) {
+          console.log('Upload success:', data.screenshot);
           newScreenshots.push(data.screenshot);
+        } else {
+          console.error('Upload failed:', data.error);
+          alert(`文件上传失败: ${data.error}`);
         }
       }
 
+      // 批量更新状态
       if (newScreenshots.length > 0) {
         setScreenshots(prev => [...prev, ...newScreenshots]);
+
+        // 自动选中第一个新上传的截图
         setSelectedIndexes([screenshots.length]);
+
+        // 提示用户
+        alert(`✅ 成功上传 ${newScreenshots.length} 张截图！`);
       }
     } catch (error) {
       console.error('Upload error:', error);
+      alert('上传失败，请重试');
     }
   };
 
