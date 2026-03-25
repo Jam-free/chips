@@ -114,8 +114,6 @@ export default function Home() {
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
-    setUploading(true);
-
     try {
       const newScreenshots: Screenshot[] = [];
 
@@ -141,8 +139,6 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Upload error:', error);
-    } finally {
-      setUploading(false);
     }
   };
 
