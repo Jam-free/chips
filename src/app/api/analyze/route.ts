@@ -6,10 +6,29 @@ import { ChipResult } from '@/types';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { screenshotId, apiKey, provider, force } = body;
+    const { screenshotId, apiKey, provider, force, testImage } = body;
 
-    if (!screenshotId) {
+    if (!screenshotId && !testImage) {
       return NextResponse.json({ success: false, error: '缺少screenshotId' }, { status: 400 });
+    }
+
+    // 测试模式
+    if (testImage && apiKey) {
+      console.log('[Analyze API] Test mode, provider:', provider);
+      try {
+        if (provider === 'minimax') {
+          await callMiniMaxVisionAPI(testImage, '测试', apiKey);
+        } else {
+          await callGLMVisionAPI(testImage, '测试', apiKey);
+        }
+        return NextResponse.json({ success: true, test: true });
+      } catch (error) {
+        console.error('[Analyze API] Test failed:', error);
+        return NextResponse.json({
+          success: false,
+          error: error instanceof Error ? error.message : 'API调用失败'
+        }, { status: 400 });
+      }
     }
 
     // 获取截图

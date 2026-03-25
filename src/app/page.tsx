@@ -32,74 +32,6 @@ interface UploadProgress {
   error?: string;
 }
 
-// 上传单个文件（带重试）
-async function uploadFileWithRetry(
-  file: File,
-  maxRetries: number = 2
-): Promise<{ success: boolean; screenshot?: Screenshot; error?: string }> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
-
-      const formData = new FormData();
-      formData.append('file', file);
-
-      console.log(`[Upload] Attempt ${attempt + 1}/${maxRetries + 1} for ${file.name}`);
-
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      }
-
-      const data = await res.json();
-
-      if (data.success && data.screenshot) {
-        const screenshot: Screenshot = {
-          id: data.screenshot.id,
-          filename: data.screenshot.filename,
-          imagePath: data.screenshot.imagePath,
-          uploadedAt: new Date(data.screenshot.uploadedAt),
-          imageHash: data.screenshot.imageHash
-        };
-        return { success: true, screenshot };
-      } else {
-        throw new Error(data.error || '上传失败');
-      }
-    } catch (error: unknown) {
-      const isLastAttempt = attempt === maxRetries;
-      const errorMessage = error instanceof Error ? error.message : '未知错误';
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.error(`[Upload] Timeout on attempt ${attempt + 1} for ${file.name}`);
-        if (!isLastAttempt) {
-          // 等待后重试（指数退避）
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
-          continue;
-        }
-        return { success: false, error: '上传超时，请检查网络或压缩图片后重试' };
-      }
-
-      if (isLastAttempt) {
-        return { success: false, error: errorMessage };
-      }
-
-      console.warn(`[Upload] Attempt ${attempt + 1} failed for ${file.name}:`, errorMessage);
-      // 等待后重试
-      await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
-    }
-  }
-
-  return { success: false, error: '上传失败，已达最大重试次数' };
-}
-
 export default function Home() {
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [results, setResults] = useState<Record<string, ChipResult>>({});
@@ -109,6 +41,7 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState<Record<string, boolean>>({});
   const [apiKey, setApiKey] = useState('');
   const [provider, setProvider] = useState<'glm' | 'minimax'>('glm');
+  const [testingApi, setTestingApi] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -140,6 +73,72 @@ export default function Home() {
       window.removeEventListener('unhandledrejection', handleUnhandledRejection);
     };
   }, []);
+
+  // 上传单个文件（带重试）
+  const uploadFileWithRetry = async (
+    file: File,
+    maxRetries: number = 2
+  ): Promise<{ success: boolean; screenshot?: Screenshot; error?: string }> => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        console.log(`[Upload] Attempt ${attempt + 1}/${maxRetries + 1} for ${file.name}`);
+
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+
+        const data = await res.json();
+
+        if (data.success && data.screenshot) {
+          const screenshot: Screenshot = {
+            id: data.screenshot.id,
+            filename: data.screenshot.filename,
+            imagePath: data.screenshot.imagePath,
+            uploadedAt: new Date(data.screenshot.uploadedAt),
+            imageHash: data.screenshot.imageHash
+          };
+          return { success: true, screenshot };
+        } else {
+          throw new Error(data.error || '上传失败');
+        }
+      } catch (error: unknown) {
+        const isLastAttempt = attempt === maxRetries;
+        const errorMessage = error instanceof Error ? error.message : '未知错误';
+
+        if (error instanceof Error && error.name === 'AbortError') {
+          console.error(`[Upload] Timeout on attempt ${attempt + 1} for ${file.name}`);
+          if (!isLastAttempt) {
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+            continue;
+          }
+          return { success: false, error: '上传超时，请检查网络或压缩图片后重试' };
+        }
+
+        if (isLastAttempt) {
+          return { success: false, error: errorMessage };
+        }
+
+        console.warn(`[Upload] Attempt ${attempt + 1} failed for ${file.name}:`, errorMessage);
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      }
+    }
+
+    return { success: false, error: '上传失败，已达最大重试次数' };
+  };
 
   // Prompt编辑状态
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -176,18 +175,34 @@ export default function Home() {
 
   const loadConfig = async () => {
     try {
+      // 先从localStorage加载
+      const savedKey = localStorage.getItem('chip-api-key');
+      const savedProvider = localStorage.getItem('chip-provider') as 'glm' | 'minimax' | null;
+
+      if (savedKey) {
+        setApiKey(savedKey);
+      }
+      if (savedProvider) {
+        setProvider(savedProvider);
+      }
+
+      // 再从服务器加载（如果有配置）
       const res = await fetch('/api/config');
       if (!res.ok) {
-        console.warn('Failed to load config:', res.status);
+        console.warn('Failed to load config from server:', res.status);
         return;
       }
       const data = await res.json();
-      if (data.glmKey) {
-        setApiKey(data.glmKey);
-        setProvider('glm');
-      } else if (data.minimaxKey) {
-        setApiKey(data.minimaxKey);
-        setProvider('minimax');
+
+      // 如果localStorage没有配置，但服务器有，则使用服务器的
+      if (!savedKey && (data.glmKey || data.minimaxKey)) {
+        if (data.glmKey) {
+          setApiKey(data.glmKey);
+          setProvider('glm');
+        } else if (data.minimaxKey) {
+          setApiKey(data.minimaxKey);
+          setProvider('minimax');
+        }
       }
     } catch (error) {
       console.error('Failed to load config:', error);
@@ -389,11 +404,21 @@ export default function Home() {
       });
 
       const data = await res.json();
+
       if (data.success) {
         setResults(prev => ({ ...prev, [screenshotId]: data.data }));
+
+        // 如果使用的是模拟数据，提示用户
+        if (!apiKey) {
+          console.warn('[Analyze] 使用模拟数据（未配置API Key）');
+        }
+      } else {
+        // 显示错误消息
+        alert(`生成失败：${data.error || '未知错误'}`);
       }
     } catch (error) {
-      console.error('Analyze error:', error);
+      console.error('[Analyze] Error:', error);
+      alert('生成失败，请检查网络连接或重试');
     } finally {
       setAnalyzing(prev => ({ ...prev, [screenshotId]: false }));
     }
@@ -469,6 +494,44 @@ export default function Home() {
       window.open(url, '_blank');
     } catch (error) {
       console.error('Export error:', error);
+    }
+  };
+
+  const handleTestApi = async () => {
+    if (!apiKey.trim()) {
+      alert('请先输入API密钥');
+      return;
+    }
+
+    setTestingApi(true);
+
+    try {
+      // 创建一个简单的测试图片（1x1像素的PNG）
+      const testImageBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          screenshotId: 'test',
+          apiKey,
+          provider,
+          testImage: testImageBase64
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        alert(`✅ API测试成功！\n\n提供商: ${provider === 'glm' ? 'GLM-4V' : 'MiniMax VL'}\n状态: 正常工作`);
+      } else {
+        alert(`❌ API测试失败\n\n错误: ${data.error || '未知错误'}\n\n请检查API密钥是否正确`);
+      }
+    } catch (error) {
+      console.error('Test API error:', error);
+      alert('❌ API测试失败\n\n请检查网络连接');
+    } finally {
+      setTestingApi(false);
     }
   };
 
@@ -747,7 +810,7 @@ export default function Home() {
                     <div className="space-y-3">
                       <label className="text-sm font-semibold text-slate-900 block">
                         API密钥
-                        <span className="font-normal text-slate-500 ml-1">（可选）</span>
+                        <span className="font-normal text-slate-500 ml-1">（推荐配置）</span>
                       </label>
                       <Input
                         type="password"
@@ -756,9 +819,11 @@ export default function Home() {
                         placeholder="输入GLM或MiniMax的API Key"
                         className="bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400"
                       />
-                      <p className="text-xs text-slate-600 leading-relaxed">
-                        留空将使用模拟数据进行演示
-                      </p>
+                      <div className="text-xs text-slate-600 leading-relaxed space-y-1">
+                        <p>• 留空将使用模拟数据（固定问题）</p>
+                        <p>• 配置后可使用真实AI生成个性化问题</p>
+                        <p className="text-amber-600">• API Key仅保存在浏览器本地</p>
+                      </div>
                     </div>
 
                     <div className="space-y-3">
@@ -770,16 +835,55 @@ export default function Home() {
                           <SelectValue placeholder="选择提供商" />
                         </SelectTrigger>
                         <SelectContent className="bg-white border-slate-200">
-                          <SelectItem value="glm" className="text-slate-900 focus:bg-slate-100">GLM-4V</SelectItem>
-                          <SelectItem value="minimax" className="text-slate-900 focus:bg-slate-100">MiniMax VL</SelectItem>
+                          <SelectItem value="glm" className="text-slate-900 focus:bg-slate-100">
+                            GLM-4V（智谱AI）
+                          </SelectItem>
+                          <SelectItem value="minimax" className="text-slate-900 focus:bg-slate-100">
+                            MiniMax VL
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="pt-2 border-t border-slate-200">
+                    <div className="pt-2 border-t border-slate-200 space-y-2">
+                      <Button
+                        onClick={() => {
+                          // 保存配置
+                          if (apiKey.trim()) {
+                            localStorage.setItem('chip-api-key', apiKey);
+                            localStorage.setItem('chip-provider', provider);
+                            alert('✅ API配置已保存');
+                          } else {
+                            localStorage.removeItem('chip-api-key');
+                            localStorage.removeItem('chip-provider');
+                            alert('✅ 已清除API配置，将使用模拟数据');
+                          }
+                        }}
+                        className="w-full bg-slate-900 hover:bg-slate-800 text-white"
+                      >
+                        💾 保存配置
+                      </Button>
+                      {apiKey.trim() && (
+                        <Button
+                          onClick={handleTestApi}
+                          disabled={testingApi}
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                        >
+                          {testingApi ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              测试中...
+                            </>
+                          ) : (
+                            <>
+                              🧪 测试API连接
+                            </>
+                          )}
+                        </Button>
+                      )}
                       <Button
                         onClick={handleExport}
-                        className="w-full bg-slate-900 hover:bg-slate-800 text-white"
+                        className="w-full bg-slate-700 hover:bg-slate-600 text-white"
                       >
                         <Download className="h-4 w-4 mr-2" />
                         导出Excel
@@ -893,6 +997,11 @@ export default function Home() {
 
                       {/* 下方：生成按钮 */}
                       <div>
+                        {!apiKey && !result && (
+                          <div className="mb-2 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700 text-center">
+                            💡 未配置API Key，将使用模拟数据
+                          </div>
+                        )}
                         {isAnalyzing ? (
                           <Button
                             disabled
