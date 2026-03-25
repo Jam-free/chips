@@ -1,65 +1,151 @@
 // 服务器端VLM调用函数（只能在API路由中使用）
 
-// 从imagePath获取base64数据（支持base64字符串或文件路径）
-async function getImageAsBase64(imagePath: string): Promise<string> {
-  // 如果已经是base64格式，直接返回
-  if (imagePath.startsWith('data:')) {
-    // 提取base64部分（去掉data:image/xxx;base64,前缀）
-    const base64Data = imagePath.split(',')[1];
-    return base64Data;
-  }
-
-  // 否则从文件系统读取
-  const fs = await import('fs/promises');
-  const path = await import('path');
-
-  const fullPath = path.join(process.cwd(), 'public', imagePath.replace(/^\//, ''));
-  const imageBuffer = await fs.readFile(fullPath);
-  return imageBuffer.toString('base64');
+interface ImageData {
+  base64: string;
+  mimeType: string;
 }
 
-// 调用MiniMax Vision API（兼容Anthropic格式）
+function getImageData(imagePath: string): ImageData {
+  if (imagePath.startsWith('data:')) {
+    const mimeMatch = imagePath.match(/^data:([^;]+);base64,/);
+    const mimeType = mimeMatch?.[1] || 'image/jpeg';
+    const base64 = imagePath.split(',')[1];
+    return { base64, mimeType };
+  }
+  return { base64: imagePath, mimeType: 'image/jpeg' };
+}
+
+interface VLMResult {
+  screenUnderstanding: string;
+  chips: string[];
+}
+
+function parseVLMResponse(raw: string): VLMResult {
+  console.log('[parseVLMResponse] Raw length:', raw.length);
+  console.log('[parseVLMResponse] Raw content:', raw.substring(0, 800));
+
+  let content = raw.trim();
+
+  // Step 1: strip markdown code fences
+  content = content.replace(/^```(?:json)?\s*\n?/gm, '').replace(/\n?```\s*$/gm, '').trim();
+
+  // Step 2: try full-text JSON.parse
+  const jsonAttempt = tryParseJSON(content);
+  if (jsonAttempt) {
+    const result = extractFromParsed(jsonAttempt);
+    if (result) return result;
+  }
+
+  // Step 3: find the outermost { ... } substring
+  const firstBrace = content.indexOf('{');
+  const lastBrace = content.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const substr = content.substring(firstBrace, lastBrace + 1);
+    const parsed = tryParseJSON(substr);
+    if (parsed) {
+      const result = extractFromParsed(parsed);
+      if (result) return result;
+    }
+  }
+
+  // Step 4: try to find a JSON array of strings
+  const arrMatch = content.match(/\[[\s\S]*?\]/);
+  if (arrMatch) {
+    const parsed = tryParseJSON(arrMatch[0]);
+    if (Array.isArray(parsed)) {
+      const chips = parsed
+        .map((c: unknown) => (typeof c === 'string' ? c : (c as { text?: string })?.text))
+        .filter((s): s is string => typeof s === 'string' && s.length > 2)
+        .slice(0, 2);
+      if (chips.length > 0) {
+        return { screenUnderstanding: '已分析屏幕内容', chips };
+      }
+    }
+  }
+
+  // Step 5: extract Chinese question sentences from free-form text
+  const chips = extractQuestionsFromText(content);
+  console.log('[parseVLMResponse] Fallback text extraction got:', chips);
+  return { screenUnderstanding: '已分析屏幕内容', chips };
+}
+
+function tryParseJSON(str: string): unknown | null {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
+
+function extractFromParsed(parsed: unknown): VLMResult | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+
+  const screenUnderstanding =
+    (typeof obj.screen_briefing === 'string' ? obj.screen_briefing : null) ||
+    (typeof obj.screenUnderstanding === 'string' ? obj.screenUnderstanding : null) ||
+    '已分析屏幕内容';
+
+  if (!Array.isArray(obj.chips)) return null;
+
+  const chips = (obj.chips as unknown[])
+    .map((c: unknown) => {
+      if (typeof c === 'string') return c;
+      if (c && typeof c === 'object' && 'text' in c && typeof (c as { text: unknown }).text === 'string') {
+        return (c as { text: string }).text;
+      }
+      return null;
+    })
+    .filter((s): s is string => typeof s === 'string' && s.length > 1)
+    .slice(0, 2);
+
+  if (chips.length === 0) return null;
+
+  console.log('[extractFromParsed] Success:', { screenUnderstanding, chips });
+  return { screenUnderstanding, chips };
+}
+
+function extractQuestionsFromText(text: string): string[] {
+  const questions: string[] = [];
+
+  // Chinese question marks
+  const qSentences = text.match(/[^。！？.!\n]*[？?][^。！？.!\n]*/g);
+  if (qSentences) {
+    for (const s of qSentences) {
+      const q = s.replace(/^[\s\d.、\-•]+/, '').trim();
+      if (q.length >= 4 && q.length <= 30) {
+        questions.push(q);
+      }
+    }
+  }
+
+  // Numbered list items (1. xxx  2. xxx)
+  if (questions.length < 2) {
+    const numbered = text.match(/\d+[.、]\s*(.{4,25})/g);
+    if (numbered) {
+      for (const n of numbered) {
+        const q = n.replace(/^\d+[.、]\s*/, '').trim();
+        if (q.length >= 4 && !questions.includes(q)) {
+          questions.push(q.endsWith('？') || q.endsWith('?') ? q : q + '？');
+        }
+      }
+    }
+  }
+
+  return [...new Set(questions)].slice(0, 2);
+}
+
+// ── MiniMax Vision API ──
 export async function callMiniMaxVisionAPI(
   imagePath: string,
   prompt: string,
   apiKey: string
-): Promise<{ screenUnderstanding: string; chips: string[] }> {
-  console.log('[MiniMax API] 开始调用，API key长度:', apiKey?.length);
-  console.log('[MiniMax API] 图片类型:', imagePath.startsWith('data:') ? 'base64' : 'file');
+): Promise<VLMResult> {
+  console.log('[MiniMax API] Starting call');
 
-  // 获取base64数据
-  const base64Image = await getImageAsBase64(imagePath);
-  console.log('[MiniMax API] 图片大小:', base64Image.length, 'characters');
+  const { base64, mimeType } = getImageData(imagePath);
+  console.log('[MiniMax API] Image mimeType:', mimeType, 'base64 length:', base64.length);
 
-  // 构建请求数据
-  const requestData = {
-    model: "claude-3-5-sonnet-20241022",
-    max_tokens: 512,  // 减少token数量，加快速度
-    temperature: 0.3,  // 降低温度，提高准确性
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/jpeg",
-              data: base64Image
-            }
-          },
-          {
-            type: "text",
-            text: prompt
-          }
-        ]
-      }
-    ]
-  };
-
-  console.log('[MiniMax API] 发送请求到: https://api.minimaxi.com/anthropic/v1/messages');
-
-  // 发送请求
   const response = await fetch('https://api.minimaxi.com/anthropic/v1/messages', {
     method: 'POST',
     headers: {
@@ -67,54 +153,44 @@ export async function callMiniMaxVisionAPI(
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01'
     },
-    body: JSON.stringify(requestData)
+    body: JSON.stringify({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1024,
+      temperature: 0.3,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    })
   });
 
-  console.log('[MiniMax API] 响应状态:', response.status);
-
   if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[MiniMax API] 错误详情:', errorText);
-    throw new Error(`MiniMax API错误: ${response.status} - ${errorText}`);
+    const errText = await response.text();
+    console.error('[MiniMax API] HTTP', response.status, errText);
+    throw new Error(`MiniMax API ${response.status}: ${errText.substring(0, 300)}`);
   }
 
   const data = await response.json();
-  console.log('[MiniMax API] 调用成功');
+  const content = data.content?.[0]?.text || '';
+  console.log('[MiniMax API] Raw response:', content.substring(0, 500));
 
-  // 解析响应
-  const content = data.content[0]?.text || data.content?.[0]?.text || '';
-
-  // 尝试解析JSON格式的响应
-  try {
-    const parsed = JSON.parse(content);
-    return {
-      screenUnderstanding: parsed.screen_briefing || '无法理解屏幕内容',
-      chips: parsed.chips?.map((c: unknown) => typeof c === 'string' ? c : (c as { text?: string }).text) || []
-    };
-  } catch {
-    // 如果不是JSON格式，尝试提取问题
-    return {
-      screenUnderstanding: '已分析屏幕内容',
-      chips: extractQuestions(content)
-    };
-  }
+  return parseVLMResponse(content);
 }
 
-// 调用GLM-4V API
+// ── GLM-4V API ──
 export async function callGLMVisionAPI(
   imagePath: string,
   prompt: string,
   apiKey: string
-): Promise<{ screenUnderstanding: string; chips: string[] }> {
+): Promise<VLMResult> {
   const startTime = Date.now();
-  console.log('[GLM API] Starting call at', new Date().toISOString());
+  console.log('[GLM API] Starting call');
 
-  // 获取base64数据
-  const base64Image = await getImageAsBase64(imagePath);
-  console.log('[GLM API] Image size:', base64Image.length, 'characters');
-
-  console.log('[GLM API] Prompt length:', prompt.length);
-  console.log('[GLM API] Prompt preview:', prompt.substring(0, 200));
+  const { base64, mimeType } = getImageData(imagePath);
+  console.log('[GLM API] Image mimeType:', mimeType, 'base64 length:', base64.length);
 
   const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
     method: 'POST',
@@ -123,149 +199,35 @@ export async function callGLMVisionAPI(
       'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: 'glm-4v',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
-          ]
-        }
-      ],
-      max_tokens: 512,  // 减少token数量，加快速度
-      temperature: 0.3  // 降低温度，提高准确性
+      model: 'glm-4v-flash',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
+        ]
+      }],
+      max_tokens: 1024,
+      temperature: 0.3
     })
   });
 
-  console.log('[GLM API] Response time:', Date.now() - startTime, 'ms');
+  const elapsed = Date.now() - startTime;
+  console.log('[GLM API] Response in', elapsed, 'ms, status:', response.status);
 
   if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[GLM API] Error response:', errorText);
-    throw new Error(`GLM API错误: ${response.status} - ${errorText}`);
+    const errText = await response.text();
+    console.error('[GLM API] HTTP', response.status, errText);
+    throw new Error(`GLM API ${response.status}: ${errText.substring(0, 300)}`);
   }
 
   const data = await response.json();
-  let content = data.choices?.[0]?.message?.content || '';
+  const content = data.choices?.[0]?.message?.content || '';
+  console.log('[GLM API] Raw response:', content.substring(0, 500));
 
-  console.log('[GLM API] Content length:', content.length);
-  console.log('[GLM API] Raw content:', content.substring(0, 200));
-
-  // GLM有时候会返回markdown格式的JSON，需要清理
-  content = content.trim();
-
-  // 移除markdown代码块标记
-  content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-  // 移除可能的前后引号
-  if (content.startsWith('"') || content.startsWith("'")) {
-    content = content.substring(1);
-  }
-  if (content.endsWith('"') || content.endsWith("'")) {
-    content = content.slice(0, -1);
+  if (!content) {
+    throw new Error('GLM API 返回空内容');
   }
 
-  console.log('[GLM API] 清理后的内容:', content);
-
-  try {
-    const parsed = JSON.parse(content);
-    console.log('[GLM API] JSON解析成功:', JSON.stringify(parsed));
-
-    let chips: string[] = [];
-
-    // 尝试从不同可能的字段提取chips
-    if (parsed.chips && Array.isArray(parsed.chips)) {
-      chips = parsed.chips.map((c: unknown) => typeof c === 'string' ? c : (c as { text?: string }).text || c).filter(Boolean) as string[];
-    }
-
-    console.log('[GLM API] 提取到的chips数量:', chips.length, 'chips:', chips);
-
-    // 如果chips少于2个，生成默认问题
-    while (chips.length < 2) {
-      console.log('[GLM API] chips不足2个，补充默认问题');
-      if (chips.length === 0) chips.push('这张图片有什么有趣的地方？');
-      else chips.push('你想了解关于这个的什么信息？');
-    }
-
-    // 只取前2个
-    chips = chips.slice(0, 2);
-
-    console.log('[GLM API] 最终返回的chips:', chips);
-
-    return {
-      screenUnderstanding: parsed.screen_briefing || parsed.screenUnderstanding || '已分析屏幕内容',
-      chips
-    };
-  } catch (parseError) {
-    console.log('[GLM API] JSON解析失败，使用智能提取，错误:', parseError);
-    // JSON解析失败，智能提取问题
-    const extracted = extractQuestions(content);
-    console.log('[GLM API] 提取到的问题:', extracted);
-    return {
-      screenUnderstanding: '已分析屏幕内容',
-      chips: extracted.length >= 2 ? extracted : ['这张图片有什么有趣的地方？', '你想了解关于这个的什么信息？']
-    };
-  }
-}
-
-// 从文本中提取问题
-function extractQuestions(text: string): string[] {
-  const questions: string[] = [];
-
-  console.log('[extractQuestions] 开始提取，文本长度:', text.length);
-
-  // 方法1: 尝试匹配问号结尾的句子
-  const sentences = text.split(/[。！？.!?。]/);
-  for (const sentence of sentences) {
-    const trimmed = sentence.trim();
-    if (trimmed.length > 3 && (trimmed.includes('？') || trimmed.includes('?'))) {
-      // 移除问号并添加
-      const question = trimmed.replace(/[？?]/g, '').trim();
-      if (question.length > 0) {
-        questions.push(question + '？');
-      }
-    }
-  }
-
-  console.log('[extractQuestions] 通过问号提取到:', questions.length, '个问题');
-
-  // 方法2: 如果问题不足，查找疑问词
-  if (questions.length < 2) {
-    const questionPatterns = [
-      /(?:怎么|如何|什么|为什么|哪|哪儿|是否|能不能|可不可以|可以|要|想|需要)[^？?]{1,10}/g
-    ];
-
-    for (const pattern of questionPatterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        for (const match of matches) {
-          const question = match.trim() + '？';
-          if (!questions.includes(question) && question.length > 3) {
-            questions.push(question);
-          }
-        }
-      }
-    }
-  }
-
-  console.log('[extractQuestions] 通过疑问词提取到:', questions.length, '个问题');
-
-  // 方法3: 如果还是不足，生成默认问题
-  if (questions.length < 2) {
-    const defaultQuestions = [
-      '这个功能怎么用？',
-      '这里有什么特别的吗？',
-      '你能解释一下这个吗？',
-      '这是什么意思？'
-    ];
-    questions.push(...defaultQuestions.filter(q => !questions.includes(q)));
-  }
-
-  // 去重并只取前2个
-  const uniqueQuestions = Array.from(new Set(questions)).slice(0, 2);
-
-  console.log('[extractQuestions] 最终返回:', uniqueQuestions);
-
-  return uniqueQuestions;
+  return parseVLMResponse(content);
 }

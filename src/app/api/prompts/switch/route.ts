@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dataStore } from '@/lib/store';
+import { callGLMVisionAPI, callMiniMaxVisionAPI } from '@/lib/server-vlm';
+import { ChipResult } from '@/types';
 
 // POST - 切换prompt
 export async function POST(request: NextRequest) {
@@ -20,38 +22,57 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// POST - 重新生成所有截图
-export async function PUT() {
+// PUT - 重新生成所有截图的chips（使用真实VLM）
+export async function PUT(request: NextRequest) {
   try {
+    const body = await request.json();
+    const { apiKey, provider } = body;
+
     const screenshots = dataStore.getAllScreenshots();
     const currentPrompt = dataStore.getCurrentPrompt();
 
-    const results = [];
+    if (!currentPrompt?.content) {
+      return NextResponse.json({ success: false, error: 'Prompt配置错误' }, { status: 500 });
+    }
+
+    const results: { screenshotId: string; cached: boolean; error?: string }[] = [];
 
     for (const screenshot of screenshots) {
-      // 检查是否已存在该prompt的结果
-      const existingResults = dataStore.getResult(screenshot.id);
-      const existing = existingResults.find(r => r.promptVersion === currentPrompt.version);
+      // 不使用缓存，强制重新生成
+      try {
+        if (apiKey) {
+          const vlmResult = provider === 'minimax'
+            ? await callMiniMaxVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
+            : await callGLMVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
 
-      if (existing) {
-        results.push({ screenshotId: screenshot.id, cached: true });
-        continue;
+          const chipResult: ChipResult = {
+            screenshotId: screenshot.id,
+            promptVersion: currentPrompt.version,
+            promptName: currentPrompt.name,
+            generatedAt: new Date(),
+            screenUnderstanding: vlmResult.screenUnderstanding,
+            chips: vlmResult.chips
+          };
+          dataStore.addResult(chipResult);
+          results.push({ screenshotId: screenshot.id, cached: false });
+        } else {
+          // 无API Key时用mock
+          const chipResult: ChipResult = {
+            screenshotId: screenshot.id,
+            promptVersion: currentPrompt.version,
+            promptName: currentPrompt.name,
+            generatedAt: new Date(),
+            screenUnderstanding: '未配置API Key，使用模拟数据',
+            chips: ['这个功能怎么用？', '有什么设置选项？']
+          };
+          dataStore.addResult(chipResult);
+          results.push({ screenshotId: screenshot.id, cached: false });
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error('[Regenerate] Failed for', screenshot.id, ':', errMsg);
+        results.push({ screenshotId: screenshot.id, cached: false, error: errMsg });
       }
-
-      // 重新生成 - 使用模拟数据（批量操作不消耗API调用）
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const result = {
-        screenshotId: screenshot.id,
-        promptVersion: currentPrompt.version,
-        promptName: currentPrompt.name,
-        generatedAt: new Date(),
-        screenUnderstanding: '已重新生成',
-        chips: ['这个功能怎么用？', '这里可以设置吗？']
-      };
-
-      dataStore.addResult(result);
-      results.push({ screenshotId: screenshot.id, cached: false });
     }
 
     return NextResponse.json({ success: true, results });

@@ -378,19 +378,17 @@ export default function Home() {
         setSelectedIndexes([currentScreenshotCount]);
       }
 
-      // 显示总结
+      // 静默完成上传，不显示弹窗
       const successCount = newScreenshots.length;
       const failCount = files.length - successCount;
 
+      console.log(`[handleFileUpload] Upload completed: ${successCount} success, ${failCount} failed`);
+
+      // 如果有失败的上传，延迟1秒后清理状态
       setTimeout(() => {
-        if (failCount === 0) {
-          alert(`✅ 成功上传 ${successCount} 张截图！`);
-        } else {
-          alert(`⚠️ 上传完成：成功 ${successCount} 张，失败 ${failCount} 张`);
-        }
         setIsUploading(false);
         setUploadProgress([]);
-      }, 1000);
+      }, failCount > 0 ? 1000 : 500);
 
     } catch (error) {
       console.error('[handleFileUpload] Fatal error:', error);
@@ -401,13 +399,8 @@ export default function Home() {
   };
 
   const handleAnalyze = async (screenshotId: string) => {
-    console.log('[handleAnalyze] Starting analysis for screenshot:', screenshotId);
-    console.log('[handleAnalyze] API Key configured:', !!apiKey);
-    console.log('[handleAnalyze] Provider:', provider);
-
-    // 如果没有API Key，提前告知用户
     if (!apiKey) {
-      const willUseMock = confirm('💡 未配置API Key，将使用模拟数据（固定问题）。\n\n是否继续？\n\n点击"取消"可前往设置配置API Key。');
+      const willUseMock = confirm('未配置API Key，将使用模拟数据。\n\n点击"取消"前往设置配置API Key。');
       if (!willUseMock) {
         setSettingsDialogOpen(true);
         return;
@@ -416,15 +409,6 @@ export default function Home() {
 
     setAnalyzing(prev => ({ ...prev, [screenshotId]: true }));
 
-    // 显示生成提示
-    if (apiKey) {
-      console.log('[handleAnalyze] 使用真实API，预计需要10-20秒...');
-    } else {
-      console.log('[handleAnalyze] 使用模拟数据，预计需要1-3秒...');
-    }
-
-    const startTime = Date.now();
-
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -432,69 +416,26 @@ export default function Home() {
         body: JSON.stringify({ screenshotId, apiKey, provider }),
       });
 
-      const elapsed = Date.now() - startTime;
-      console.log(`[handleAnalyze] Response received in ${elapsed}ms`);
-      console.log('[handleAnalyze] Response status:', res.status);
-
       const data = await res.json();
-      console.log('[handleAnalyze] Response data:', data);
 
-      if (data.success) {
-        // 验证返回的数据
-        if (!data.data) {
-          console.error('[handleAnalyze] No data in response');
-          alert('生成失败：返回数据格式错误');
-          return;
-        }
+      if (!res.ok || !data.success) {
+        alert(`生成失败: ${data.error || `HTTP ${res.status}`}`);
+        return;
+      }
 
-        if (!data.data.chips || !Array.isArray(data.data.chips)) {
-          console.error('[handleAnalyze] Invalid chips:', data.data.chips);
-          alert('生成失败：chips数据格式错误');
-          return;
-        }
+      if (!data.data?.chips || !Array.isArray(data.data.chips)) {
+        alert('生成失败：返回数据格式错误');
+        return;
+      }
 
-        // 检查是否使用了模拟数据
-        if (data.metadata?.usedMockData) {
-          console.warn('[handleAnalyze] ⚠️ Used mock data instead of real API');
-          console.warn('[handleAnalyze] This means API key was empty or API call failed');
-          // 可以选择显示警告给用户
-          if (apiKey) {
-            console.error('[handleAnalyze] ❌ API key was provided but still used mock data!');
-            console.error('[handleAnalyze] This indicates the API call failed');
-            alert('⚠️ API调用失败，已使用模拟数据\n\n请检查API Key是否正确，或查看控制台日志');
-          } else {
-            console.log('[handleAnalyze] ℹ️ Used mock data (no API key configured)');
-          }
-        } else {
-          console.log('[handleAnalyze] ✅ Used real API:', data.metadata?.provider);
-        }
+      setResults(prev => ({ ...prev, [screenshotId]: data.data }));
 
-        console.log('[handleAnalyze] Setting result for screenshot:', screenshotId);
-        console.log('[handleAnalyze] Chips:', data.data.chips);
-        console.log('[handleAnalyze] Chips count:', data.data.chips.length);
-        console.log('[handleAnalyze] Screen understanding:', data.data.screenUnderstanding);
-
-        setResults(prev => {
-          const updated = { ...prev, [screenshotId]: data.data };
-          console.log('[handleAnalyze] Updated results:', updated);
-          return updated;
-        });
-
-        // 保存元数据
-        if (data.metadata) {
-          setAnalyzeMetadata(prev => ({
-            ...prev,
-            [screenshotId]: data.metadata
-          }));
-        }
-      } else {
-        // 显示错误消息
-        console.error('[handleAnalyze] API returned error:', data.error);
-        alert(`生成失败：${data.error || '未知错误'}`);
+      if (data.metadata) {
+        setAnalyzeMetadata(prev => ({ ...prev, [screenshotId]: data.metadata }));
       }
     } catch (error) {
       console.error('[handleAnalyze] Request failed:', error);
-      alert('生成失败，请检查网络连接或重试');
+      alert('生成失败，请检查网络连接');
     } finally {
       setAnalyzing(prev => ({ ...prev, [screenshotId]: false }));
     }
@@ -525,6 +466,27 @@ export default function Home() {
 
       setCurrentPromptId(promptId);
       setResults({});
+
+      // 如果有截图，自动重新生成
+      if (screenshots.length > 0) {
+        const confirmed = confirm('已切换Prompt，是否重新生成所有截图的话题？');
+        if (confirmed) {
+          try {
+            const res = await fetch('/api/prompts/switch', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey, provider }),
+            });
+            const data = await res.json();
+            if (data.success) {
+              loadScreenshots();
+              alert(`✅ 重新生成完成（${data.results?.length || 0}张）`);
+            }
+          } catch (err) {
+            console.error('Regenerate error:', err);
+          }
+        }
+      }
     } catch (error) {
       console.error('Switch prompt error:', error);
     }
@@ -1126,11 +1088,11 @@ export default function Home() {
                   {/* 图片+信息区域 容器 */}
                   <div className="flex shadow-xl rounded-2xl overflow-hidden">
                     {/* 主体图片 */}
-                    <div className="relative w-[260px] h-[462px] bg-muted">
+                    <div className="relative w-[260px] h-[462px] bg-muted flex items-center justify-center">
                       <img
                         src={screenshot.imagePath}
                         alt={screenshot.filename}
-                        className="w-full h-full object-cover"
+                        className="max-w-full max-h-full object-contain"
                       />
 
                       {/* 删除按钮 - 悬浮显示 */}
