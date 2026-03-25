@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -40,10 +40,37 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState<Record<string, boolean>>({});
   const [apiKey, setApiKey] = useState('');
   const [provider, setProvider] = useState<'glm' | 'minimax'>('glm');
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   // 上传状态
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+
+  // 全局错误处理
+  React.useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      console.error('[Global Error Handler]', event.error);
+      setErrorMessage(event.message || '未知错误');
+      setHasError(true);
+      event.preventDefault();
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      console.error('[Unhandled Rejection]', event.reason);
+      setErrorMessage(event.reason?.message || '异步操作失败');
+      setHasError(true);
+      event.preventDefault();
+    };
+
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
 
   // Prompt编辑状态
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -81,6 +108,10 @@ export default function Home() {
   const loadConfig = async () => {
     try {
       const res = await fetch('/api/config');
+      if (!res.ok) {
+        console.warn('Failed to load config:', res.status);
+        return;
+      }
       const data = await res.json();
       if (data.glmKey) {
         setApiKey(data.glmKey);
@@ -91,6 +122,7 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Failed to load config:', error);
+      // 不阻塞应用，只是记录错误
     }
   };
 
@@ -123,18 +155,25 @@ export default function Home() {
   const loadPrompts = async () => {
     try {
       const res = await fetch('/api/prompts');
+      if (!res.ok) {
+        console.warn('Failed to load prompts:', res.status);
+        return;
+      }
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.prompts) {
         setPrompts(data.prompts);
-        setCurrentPromptId(data.currentPromptId);
+        setCurrentPromptId(data.currentPromptId || data.prompts[0]?.id || '');
       }
     } catch (error) {
       console.error('Failed to load prompts:', error);
+      // 不阻塞应用，只是记录错误
     }
   };
 
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
+
+    console.log('[handleFileUpload] Starting upload, files:', files.length);
 
     // 检查文件大小
     const MAX_FILE_SIZE = 3.5 * 1024 * 1024; // 3.5MB
@@ -153,6 +192,9 @@ export default function Home() {
 
     setIsUploading(true);
     const newScreenshots: Screenshot[] = [];
+
+    // 记录当前截图数量，用于后续选中
+    const currentScreenshotCount = screenshots.length;
 
     // 初始化进度
     const initialProgress: UploadProgress[] = Array.from(files).map(file => ({
@@ -179,17 +221,6 @@ export default function Home() {
           const formData = new FormData();
           formData.append('file', file);
 
-          // 模拟进度更新
-          const progressInterval = setInterval(() => {
-            setUploadProgress(prev => {
-              const newProgress = [...prev];
-              if (newProgress[i].progress < 80) {
-                newProgress[i] = { ...newProgress[i], progress: newProgress[i].progress + 10 };
-              }
-              return newProgress;
-            });
-          }, 500);
-
           const res = await fetch('/api/upload', {
             method: 'POST',
             body: formData,
@@ -197,17 +228,25 @@ export default function Home() {
           });
 
           clearTimeout(timeoutId);
-          clearInterval(progressInterval);
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          }
 
           const data = await res.json();
+          console.log('[handleFileUpload] Response:', data);
 
-          if (data.success) {
-            console.log('Upload success:', data.screenshot);
+          if (data.success && data.screenshot) {
             // 将ISO字符串日期转换回Date对象
-            const screenshotWithDate = {
-              ...data.screenshot,
-              uploadedAt: new Date(data.screenshot.uploadedAt)
+            const screenshotWithDate: Screenshot = {
+              id: data.screenshot.id,
+              filename: data.screenshot.filename,
+              imagePath: data.screenshot.imagePath,
+              uploadedAt: new Date(data.screenshot.uploadedAt),
+              imageHash: data.screenshot.imageHash
             };
+
+            console.log('[handleFileUpload] Screenshot created:', screenshotWithDate);
             newScreenshots.push(screenshotWithDate);
 
             // 更新为成功
@@ -216,7 +255,7 @@ export default function Home() {
             ));
           } else {
             const errorMsg = data.error || '上传失败';
-            console.error('Upload failed:', errorMsg);
+            console.error('[handleFileUpload] Upload failed:', errorMsg);
 
             // 更新为失败
             setUploadProgress(prev => prev.map((p, idx) =>
@@ -234,7 +273,7 @@ export default function Home() {
             }
           }
 
-          console.error('Upload error:', error);
+          console.error('[handleFileUpload] Upload error:', error);
 
           // 更新为失败
           setUploadProgress(prev => prev.map((p, idx) =>
@@ -245,10 +284,15 @@ export default function Home() {
 
       // 批量更新状态
       if (newScreenshots.length > 0) {
-        setScreenshots(prev => [...prev, ...newScreenshots]);
+        console.log('[handleFileUpload] Adding screenshots:', newScreenshots.length);
+        setScreenshots(prev => {
+          const updated = [...prev, ...newScreenshots];
+          console.log('[handleFileUpload] Total screenshots after update:', updated.length);
+          return updated;
+        });
 
-        // 自动选中第一个新上传的截图
-        setSelectedIndexes([screenshots.length]);
+        // 自动选中第一个新上传的截图（使用旧的长度）
+        setSelectedIndexes([currentScreenshotCount]);
       }
 
       // 显示总结
@@ -266,7 +310,7 @@ export default function Home() {
       }, 1000);
 
     } catch (error) {
-      console.error('Upload error:', error);
+      console.error('[handleFileUpload] Fatal error:', error);
       alert('上传失败，请重试');
       setIsUploading(false);
       setUploadProgress([]);
@@ -376,6 +420,35 @@ export default function Home() {
     ? selectedIndexes.map(i => screenshots[i]).filter(Boolean)
     : screenshots.slice(0, 3);
 
+  // 显示错误界面
+  if (hasError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="max-w-md w-full">
+          <Card className="p-6">
+            <div className="text-center">
+              <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+              <h2 className="text-xl font-bold mb-2">出错了</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                {errorMessage || '应用遇到了一个错误'}
+              </p>
+              <Button
+                onClick={() => {
+                  setHasError(false);
+                  setErrorMessage('');
+                  window.location.reload();
+                }}
+                className="w-full"
+              >
+                刷新页面
+              </Button>
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* 上传进度对话框 */}
@@ -389,33 +462,24 @@ export default function Home() {
 
             <div className="space-y-3 max-h-60 overflow-y-auto">
               {uploadProgress.map((progress, idx) => (
-                <div key={idx} className="bg-slate-50 rounded-lg p-3">
+                <div key={`${progress.fileName}-${idx}`} className="bg-slate-50 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium text-slate-700 truncate flex-1" title={progress.fileName}>
                       {progress.fileName}
                     </span>
-                    <span className="text-xs text-slate-500 ml-2">
+                    <span className="text-xs text-slate-500 ml-2 flex-shrink-0">
                       {progress.status === 'success' && '✅'}
                       {progress.status === 'error' && '❌'}
-                      {progress.status === 'uploading' && `${progress.progress}%`}
+                      {progress.status === 'uploading' && '⏳'}
+                      {progress.status === 'pending' && '⏳'}
                     </span>
                   </div>
 
-                  {/* 进度条 */}
-                  {progress.status === 'uploading' && (
-                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${progress.progress}%` }}
-                      />
-                    </div>
-                  )}
-
                   {/* 错误提示 */}
-                  {progress.status === 'error' && (
+                  {progress.status === 'error' && progress.error && (
                     <div className="flex items-start gap-2 mt-2 text-red-600 text-xs">
                       <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                      <span>{progress.error || '上传失败'}</span>
+                      <span className="break-words">{progress.error}</span>
                     </div>
                   )}
                 </div>
