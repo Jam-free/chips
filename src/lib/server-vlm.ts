@@ -29,12 +29,13 @@ export async function callMiniMaxVisionAPI(
 
   // 获取base64数据
   const base64Image = await getImageAsBase64(imagePath);
-  console.log('[MiniMax API] 图片大小:', base64Image.length, 'bytes');
+  console.log('[MiniMax API] 图片大小:', base64Image.length, 'characters');
 
   // 构建请求数据
   const requestData = {
     model: "claude-3-5-sonnet-20241022",
-    max_tokens: 1024,
+    max_tokens: 512,  // 减少token数量，加快速度
+    temperature: 0.3,  // 降低温度，提高准确性
     messages: [
       {
         role: "user",
@@ -105,8 +106,15 @@ export async function callGLMVisionAPI(
   prompt: string,
   apiKey: string
 ): Promise<{ screenUnderstanding: string; chips: string[] }> {
+  const startTime = Date.now();
+  console.log('[GLM API] Starting call at', new Date().toISOString());
+
   // 获取base64数据
   const base64Image = await getImageAsBase64(imagePath);
+  console.log('[GLM API] Image size:', base64Image.length, 'characters');
+
+  console.log('[GLM API] Prompt length:', prompt.length);
+  console.log('[GLM API] Prompt preview:', prompt.substring(0, 200));
 
   const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
     method: 'POST',
@@ -124,19 +132,25 @@ export async function callGLMVisionAPI(
             { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
           ]
         }
-      ]
+      ],
+      max_tokens: 512,  // 减少token数量，加快速度
+      temperature: 0.3  // 降低温度，提高准确性
     })
   });
 
+  console.log('[GLM API] Response time:', Date.now() - startTime, 'ms');
+
   if (!response.ok) {
-    throw new Error(`GLM API错误: ${response.status}`);
+    const errorText = await response.text();
+    console.error('[GLM API] Error response:', errorText);
+    throw new Error(`GLM API错误: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
-  let content = data.choices[0]?.message?.content || '';
+  let content = data.choices?.[0]?.message?.content || '';
 
-  console.log('[GLM API] 原始内容长度:', content.length);
-  console.log('[GLM API] 原始内容前200字符:', content.substring(0, 200));
+  console.log('[GLM API] Content length:', content.length);
+  console.log('[GLM API] Raw content:', content.substring(0, 200));
 
   // GLM有时候会返回markdown格式的JSON，需要清理
   content = content.trim();

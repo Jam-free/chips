@@ -51,6 +51,16 @@ export async function POST(request: NextRequest) {
     // 获取当前prompt
     const currentPrompt = dataStore.getCurrentPrompt();
     console.log('[Analyze API] Current prompt:', currentPrompt.name, currentPrompt.version);
+    console.log('[Analyze API] Prompt content length:', currentPrompt.content?.length);
+    console.log('[Analyze API] Prompt preview:', currentPrompt.content?.substring(0, 300));
+
+    if (!currentPrompt || !currentPrompt.content) {
+      console.error('[Analyze API] No valid prompt found');
+      return NextResponse.json({
+        success: false,
+        error: 'Prompt配置错误'
+      }, { status: 500 });
+    }
 
     // 检查是否已经有该prompt的结果（除非强制重新生成）
     if (!force) {

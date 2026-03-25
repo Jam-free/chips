@@ -398,7 +398,25 @@ export default function Home() {
     console.log('[handleAnalyze] API Key configured:', !!apiKey);
     console.log('[handleAnalyze] Provider:', provider);
 
+    // 如果没有API Key，提前告知用户
+    if (!apiKey) {
+      const willUseMock = confirm('💡 未配置API Key，将使用模拟数据（固定问题）。\n\n是否继续？\n\n点击"取消"可前往设置配置API Key。');
+      if (!willUseMock) {
+        setSettingsDialogOpen(true);
+        return;
+      }
+    }
+
     setAnalyzing(prev => ({ ...prev, [screenshotId]: true }));
+
+    // 显示生成提示
+    if (apiKey) {
+      console.log('[handleAnalyze] 使用真实API，预计需要10-20秒...');
+    } else {
+      console.log('[handleAnalyze] 使用模拟数据，预计需要1-3秒...');
+    }
+
+    const startTime = Date.now();
 
     try {
       const res = await fetch('/api/analyze', {
@@ -407,6 +425,8 @@ export default function Home() {
         body: JSON.stringify({ screenshotId, apiKey, provider }),
       });
 
+      const elapsed = Date.now() - startTime;
+      console.log(`[handleAnalyze] Response received in ${elapsed}ms`);
       console.log('[handleAnalyze] Response status:', res.status);
 
       const data = await res.json();
@@ -1040,13 +1060,18 @@ export default function Home() {
                           </div>
                         )}
                         {isAnalyzing ? (
-                          <Button
-                            disabled
-                            className="w-full h-12 rounded-xl bg-slate-300 text-slate-600"
-                          >
-                            <RefreshCw className="h-5 w-5 mr-2 animate-spin" />
-                            分析中
-                          </Button>
+                          <div className="space-y-2">
+                            <Button
+                              disabled
+                              className="w-full h-12 rounded-xl bg-blue-600 text-white"
+                            >
+                              <RefreshCw className="h-5 w-5 mr-2 animate-spin" />
+                              {apiKey ? 'AI分析中...' : '生成中...'}
+                            </Button>
+                            <p className="text-xs text-slate-500 text-center">
+                              {apiKey ? '正在调用GLM-4V分析图片（约10-20秒）' : '正在生成模拟数据（约1-3秒）'}
+                            </p>
+                          </div>
                         ) : (
                           <Button
                             onClick={(e) => {

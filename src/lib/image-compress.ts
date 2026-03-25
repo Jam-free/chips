@@ -11,10 +11,12 @@ export async function compressImage(file: File, maxSizeMB: number = 1): Promise<
 
   const options = {
     maxSizeMB: maxSizeMB,
-    maxWidthOrHeight: 1920,
+    maxWidthOrHeight: 1280,  // 降低到1280px（原来是1920px）
     useWebWorker: true,
     fileType: file.type,
-    quality: 0.8
+    quality: 0.7,  // 降低质量到0.7（原来是0.8）
+    // 保留EXIF信息但移除GPS等隐私信息
+    alwaysKeepResolution: false
   };
 
   try {
