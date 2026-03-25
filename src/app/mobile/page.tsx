@@ -4,13 +4,11 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Upload, CheckCircle, AlertCircle } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 
 export default function MobileUploadPage() {
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState(0);
   const [error, setError] = useState('');
-  const router = useRouter();
 
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -46,8 +44,8 @@ export default function MobileUploadPage() {
         setUploaded(0);
       }, 500);
 
-    } catch (err: any) {
-      setError(err.message || '上传失败');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '上传失败');
       setUploading(false);
     }
   };
@@ -139,7 +137,7 @@ export default function MobileUploadPage() {
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground space-y-2">
             <p>1. 从手机相册选择屏幕截图</p>
-            <p>2. 点击"选择图片"批量上传</p>
+            <p>2. 点击选择图片批量上传</p>
             <p>3. 上传完成后，返回PC端查看</p>
             <p>4. PC端会自动生成话题chips</p>
           </CardContent>

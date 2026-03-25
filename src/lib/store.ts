@@ -4,7 +4,7 @@ import { defaultPrompts } from './prompts';
 // 内存存储（Demo阶段）
 // 使用全局变量避免热重载时数据丢失
 declare global {
-  var dataStore: DataStore | undefined;
+  const dataStore: DataStore | undefined;
 }
 
 class DataStore {

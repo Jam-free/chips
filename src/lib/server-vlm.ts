@@ -77,7 +77,7 @@ export async function callMiniMaxVisionAPI(
     const parsed = JSON.parse(content);
     return {
       screenUnderstanding: parsed.screen_briefing || '无法理解屏幕内容',
-      chips: parsed.chips?.map((c: any) => typeof c === 'string' ? c : c.text) || []
+      chips: parsed.chips?.map((c: unknown) => typeof c === 'string' ? c : (c as { text?: string }).text) || []
     };
   } catch {
     // 如果不是JSON格式，尝试提取问题
@@ -155,7 +155,7 @@ export async function callGLMVisionAPI(
 
     // 尝试从不同可能的字段提取chips
     if (parsed.chips && Array.isArray(parsed.chips)) {
-      chips = parsed.chips.map((c: any) => typeof c === 'string' ? c : c.text || c).filter(Boolean);
+      chips = parsed.chips.map((c: unknown) => typeof c === 'string' ? c : (c as { text?: string }).text || c).filter(Boolean) as string[];
     }
 
     console.log('[GLM API] 提取到的chips数量:', chips.length, 'chips:', chips);

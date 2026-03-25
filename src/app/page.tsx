@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,12 +16,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Upload, Download, Trash2, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Screenshot, ChipResult, PromptTemplate } from '@/types';
 import { QRCodeButton } from '@/components/qrcode-button';
 
@@ -32,10 +31,8 @@ export default function Home() {
   const [currentPromptId, setCurrentPromptId] = useState<string>('');
   const [selectedIndexes, setSelectedIndexes] = useState<number[]>([]);
   const [analyzing, setAnalyzing] = useState<Record<string, boolean>>({});
-  const [uploading, setUploading] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [provider, setProvider] = useState<'glm' | 'minimax'>('glm');
-  const [filmstripScroll, setFilmstripScroll] = useState(0);
 
   // Prompt编辑状态
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -55,8 +52,6 @@ export default function Home() {
     setPromptDialogOpen(true);
   };
 
-  const filmstripRef = useRef<HTMLDivElement>(null);
-
   // 初始化加载数据
   useEffect(() => {
     loadConfig();
@@ -69,6 +64,7 @@ export default function Home() {
     if (screenshots.length > 0 && selectedIndexes.length === 0) {
       setSelectedIndexes([0]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenshots]);
 
   const loadConfig = async () => {
@@ -171,15 +167,6 @@ export default function Home() {
     }
   };
 
-  const handleAnalyzeSelected = async () => {
-    for (const index of selectedIndexes) {
-      const screenshot = screenshots[index];
-      if (screenshot) {
-        await handleAnalyze(screenshot.id);
-      }
-    }
-  };
-
   const handleDelete = async (id: string) => {
     try {
       await fetch(`/api/upload?id=${id}`, { method: 'DELETE' });
@@ -250,14 +237,6 @@ export default function Home() {
       window.open(url, '_blank');
     } catch (error) {
       console.error('Export error:', error);
-    }
-  };
-
-  const scrollFilmstrip = (direction: 'left' | 'right') => {
-    if (filmstripRef.current) {
-      const scrollAmount = 200;
-      const newScroll = filmstripRef.current.scrollLeft + (direction === 'left' ? -scrollAmount : scrollAmount);
-      filmstripRef.current.scrollTo({ left: newScroll, behavior: 'smooth' });
     }
   };
 
@@ -476,7 +455,7 @@ export default function Home() {
                       <label className="text-sm font-semibold text-slate-900 block">
                         VLM提供商
                       </label>
-                      <Select value={provider} onValueChange={(v: any) => setProvider(v)}>
+                      <Select value={provider} onValueChange={(v: 'glm' | 'minimax') => setProvider(v)}>
                         <SelectTrigger className="bg-slate-50 border-slate-300 text-slate-900">
                           <SelectValue placeholder="选择提供商" />
                         </SelectTrigger>
@@ -648,14 +627,12 @@ export default function Home() {
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7 flex-shrink-0"
-                  onClick={() => scrollFilmstrip('left')}
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
 
               {/* 图片轴 */}
               <div
-                ref={filmstripRef}
                 className="flex-1 flex gap-2 overflow-x-auto scrollbar-hide scroll-smooth"
                 style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
               >
@@ -703,7 +680,6 @@ export default function Home() {
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 flex-shrink-0"
-                onClick={() => scrollFilmstrip('right')}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>

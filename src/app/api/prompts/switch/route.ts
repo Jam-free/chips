@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dataStore } from '@/lib/store';
-import { callMiniMaxVisionAPI } from '@/lib/server-vlm';
 
 // POST - 切换prompt
 export async function POST(request: NextRequest) {
@@ -22,7 +21,7 @@ export async function POST(request: NextRequest) {
 }
 
 // POST - 重新生成所有截图
-export async function PUT(request: NextRequest) {
+export async function PUT() {
   try {
     const screenshots = dataStore.getAllScreenshots();
     const currentPrompt = dataStore.getCurrentPrompt();
