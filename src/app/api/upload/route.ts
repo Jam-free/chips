@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { saveUploadedFile } from '@/lib/server-utils';
+import { fileToBase64 } from '@/lib/server-utils';
 import { generateId } from '@/lib/utils';
 import { Screenshot } from '@/types';
 import { dataStore } from '@/lib/store';
@@ -32,17 +32,17 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // 保存文件
-    console.log('[Upload API] Saving file...');
-    const { filename, imagePath } = await saveUploadedFile(file);
-    console.log('[Upload API] File saved:', { filename, imagePath });
+    // 转换为base64（适用于Serverless环境）
+    console.log('[Upload API] Converting file to base64...');
+    const { filename, base64 } = await fileToBase64(file);
+    console.log('[Upload API] File converted to base64, length:', base64.length);
 
-    // 创建截图记录
+    // 创建截图记录（使用base64作为imagePath）
     const screenshot: Screenshot = {
       id: generateId(),
       filename,
       uploadedAt: new Date(),
-      imagePath
+      imagePath: base64 // 直接存储base64数据
     };
 
     dataStore.addScreenshot(screenshot);
@@ -59,15 +59,7 @@ export async function POST(request: NextRequest) {
     let errorMessage = '上传失败';
 
     if (error instanceof Error) {
-      if (error.message.includes('ENOENT')) {
-        errorMessage = '文件保存失败：目录不存在';
-      } else if (error.message.includes('EACCES')) {
-        errorMessage = '文件保存失败：权限不足';
-      } else if (error.message.includes('ENOSPC')) {
-        errorMessage = '文件保存失败：磁盘空间不足';
-      } else {
-        errorMessage = error.message;
-      }
+      errorMessage = error.message;
     }
 
     return NextResponse.json({

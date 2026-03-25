@@ -1,24 +1,35 @@
 // 服务器端VLM调用函数（只能在API路由中使用）
 
+// 从imagePath获取base64数据（支持base64字符串或文件路径）
+async function getImageAsBase64(imagePath: string): Promise<string> {
+  // 如果已经是base64格式，直接返回
+  if (imagePath.startsWith('data:')) {
+    // 提取base64部分（去掉data:image/xxx;base64,前缀）
+    const base64Data = imagePath.split(',')[1];
+    return base64Data;
+  }
+
+  // 否则从文件系统读取
+  const fs = await import('fs/promises');
+  const path = await import('path');
+
+  const fullPath = path.join(process.cwd(), 'public', imagePath.replace(/^\//, ''));
+  const imageBuffer = await fs.readFile(fullPath);
+  return imageBuffer.toString('base64');
+}
+
 // 调用MiniMax Vision API（兼容Anthropic格式）
 export async function callMiniMaxVisionAPI(
   imagePath: string,
   prompt: string,
   apiKey: string
 ): Promise<{ screenUnderstanding: string; chips: string[] }> {
-  const fs = await import('fs/promises');
-  const path = await import('path');
-
   console.log('[MiniMax API] 开始调用，API key长度:', apiKey?.length);
-  console.log('[MiniMax API] 图片路径:', imagePath);
+  console.log('[MiniMax API] 图片类型:', imagePath.startsWith('data:') ? 'base64' : 'file');
 
-  // 处理图片路径
-  const fullPath = path.join(process.cwd(), 'public', imagePath.replace(/^\//, ''));
-  console.log('[MiniMax API] 完整路径:', fullPath);
-
-  const imageBuffer = await fs.readFile(fullPath);
-  const base64Image = imageBuffer.toString('base64');
-  console.log('[MiniMax API] 图片大小:', imageBuffer.length, 'bytes');
+  // 获取base64数据
+  const base64Image = await getImageAsBase64(imagePath);
+  console.log('[MiniMax API] 图片大小:', base64Image.length, 'bytes');
 
   // 构建请求数据
   const requestData = {
@@ -94,12 +105,8 @@ export async function callGLMVisionAPI(
   prompt: string,
   apiKey: string
 ): Promise<{ screenUnderstanding: string; chips: string[] }> {
-  const fs = await import('fs/promises');
-  const path = await import('path');
-
-  const fullPath = path.join(process.cwd(), 'public', imagePath.replace(/^\//, ''));
-  const imageBuffer = await fs.readFile(fullPath);
-  const base64Image = imageBuffer.toString('base64');
+  // 获取base64数据
+  const base64Image = await getImageAsBase64(imagePath);
 
   const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
     method: 'POST',
