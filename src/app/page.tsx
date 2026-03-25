@@ -618,18 +618,29 @@ export default function Home() {
     }
 
     console.log('[handleDebug] Starting debug for screenshot:', screenshotId);
-    alert('🔍 正在调试...\n\n请查看浏览器控制台（F12）查看详细信息');
+    alert('🔍 正在调试...\n\n请查看浏览器控制台（F12）查看详细信息\n\n调试可能需要30-60秒...');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 65000); // 65秒超时（前端比后端多10秒）
 
     try {
-      const res = await fetch('/api/debug', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          screenshotId,
-          apiKey,
-          provider
+      const res = await Promise.race([
+        fetch('/api/debug', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            screenshotId,
+            apiKey,
+            provider
+          }),
+          signal: controller.signal
         }),
-      });
+        new Promise<Response>((_, reject) =>
+          setTimeout(() => reject(new Error('调试请求超时（65秒）')), 65000)
+        )
+      ]);
+
+      clearTimeout(timeoutId);
 
       const data = await res.json();
 
@@ -647,20 +658,45 @@ export default function Home() {
         console.log('[handleDebug] Screen Understanding:', debug.screenUnderstanding);
         console.log('[handleDebug] Prompt Length:', debug.promptLength);
         console.log('[handleDebug] Image Size:', debug.imageSize);
+        console.log('[handleDebug] Has API Key:', debug.hasApiKey);
+        console.log('[handleDebug] Timed Out:', debug.timedOut);
 
         if (debug.error) {
           console.error('[handleDebug] Error:', debug.error);
           console.error('[handleDebug] Error Details:', debug.errorDetails);
         }
 
-        alert(`🔍 调试完成\n\n${debug.message}\n\n请查看控制台（F12）查看详细信息`);
+        // 格式化显示给用户
+        let resultMessage = `🔍 调试完成\n\n`;
+        resultMessage += `${debug.message}\n\n`;
+        resultMessage += `提供商: ${debug.provider === 'glm' ? 'GLM-4V' : debug.provider}\n`;
+        resultMessage += `耗时: ${debug.duration}\n`;
+
+        if (debug.chips && debug.chips.length > 0) {
+          resultMessage += `\n生成的Chips:\n`;
+          debug.chips.forEach((chip: string, i: number) => {
+            resultMessage += `${i + 1}. ${chip}\n`;
+          });
+        }
+
+        if (debug.error) {
+          resultMessage += `\n❌ 错误: ${debug.error}`;
+        }
+
+        alert(resultMessage);
       } else {
         console.error('[handleDebug] Debug failed:', data.error);
         alert(`❌ 调试失败: ${data.error}`);
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      clearTimeout(timeoutId);
       console.error('[handleDebug] Request failed:', error);
-      alert('❌ 调试失败，请检查网络');
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        alert('⏱️ 调试超时（65秒）\n\n可能原因：\n1. GLM API响应太慢\n2. 网络不稳定\n3. 图片太大\n\n请查看控制台日志');
+      } else {
+        alert('❌ 调试失败\n\n请检查网络连接');
+      }
     }
   };
 
