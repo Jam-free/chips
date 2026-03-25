@@ -95,11 +95,13 @@ export default function MobileUploadPage() {
                       id="mobile-file-upload"
                       disabled={uploading}
                     />
-                    <label htmlFor="mobile-file-upload">
-                      <Button className="w-full" disabled={uploading}>
-                        选择图片
-                      </Button>
-                    </label>
+                    <Button
+                      className="w-full"
+                      disabled={uploading}
+                      onClick={() => document.getElementById('mobile-file-upload')?.click()}
+                    >
+                      选择图片
+                    </Button>
                   </>
                 )}
               </div>
