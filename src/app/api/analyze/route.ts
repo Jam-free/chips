@@ -82,37 +82,61 @@ export async function POST(request: NextRequest) {
 
     // 调用VLM分析
     let screenUnderstanding: string, chips: string[];
+    let usedMockData = false;
 
     if (!apiKey) {
       // 没有API Key，使用模拟数据
-      console.log('[Analyze API] Using mock data (no API key)');
+      console.log('[Analyze API] ❌ No API key provided, using mock data');
       await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
       screenUnderstanding = '用户正在浏览APP界面';
       chips = ['这个功能怎么用？', '这里可以设置吗？'];
+      usedMockData = true;
     } else {
       // 使用真实API
-      console.log('[Analyze API] Calling VLM API with provider:', provider);
+      console.log('[Analyze API] ✅ API key provided, calling real VLM API');
+      console.log('[Analyze API] Provider:', provider);
+      console.log('[Analyze API] Screenshot image type:', screenshot.imagePath.startsWith('data:') ? 'base64' : 'url');
+      console.log('[Analyze API] Image size:', screenshot.imagePath.length);
+
       try {
+        const callStartTime = Date.now();
+
         if (provider === 'minimax') {
+          console.log('[Analyze API] Calling MiniMax API...');
           const result = await callMiniMaxVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
           screenUnderstanding = result.screenUnderstanding;
           chips = result.chips;
         } else {
+          console.log('[Analyze API] Calling GLM-4V API...');
           const result = await callGLMVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
           screenUnderstanding = result.screenUnderstanding;
           chips = result.chips;
         }
-        console.log('[Analyze API] VLM API success. Chips:', chips);
+
+        const callDuration = Date.now() - callStartTime;
+        console.log('[Analyze API] ✅ VLM API call successful in', callDuration, 'ms');
+        console.log('[Analyze API] Generated chips:', chips);
+        console.log('[Analyze API] Chips count:', chips?.length);
       } catch (error) {
-        console.error('[Analyze API] VLM API call failed:', error);
+        console.error('[Analyze API] ❌ VLM API call failed:', error);
+        console.error('[Analyze API] Error details:', {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : 'Unknown',
+          stack: error instanceof Error ? error.stack : undefined
+        });
         // 失败时使用模拟数据
         screenUnderstanding = 'API调用失败，使用模拟数据';
         chips = ['这个功能怎么用？', '这里可以设置吗？'];
+        usedMockData = true;
       }
     }
 
-    console.log('[Analyze API] Final chips:', chips);
-    console.log('[Analyze API] Screen understanding:', screenUnderstanding);
+    console.log('[Analyze API] Final result:', {
+      usedMockData,
+      chipsCount: chips?.length,
+      chips: chips,
+      screenUnderstanding
+    });
 
     // 创建结果
     const result: ChipResult = {
@@ -133,9 +157,17 @@ export async function POST(request: NextRequest) {
       generatedAt: result.generatedAt.toISOString()
     };
 
+    // 添加标记，告诉前端是否使用了模拟数据
+    console.log('[Analyze API] Response - usedMockData:', usedMockData);
+
     return NextResponse.json({
       success: true,
-      data: responseData
+      data: responseData,
+      metadata: {
+        usedMockData,
+        provider: usedMockData ? 'mock' : provider,
+        chipsCount: chips.length
+      }
     });
   } catch (error) {
     console.error('Analyze error:', error);

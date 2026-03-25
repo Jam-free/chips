@@ -32,9 +32,16 @@ interface UploadProgress {
   error?: string;
 }
 
+interface AnalyzeMetadata {
+  usedMockData: boolean;
+  provider: string;
+  chipsCount: number;
+}
+
 export default function Home() {
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [results, setResults] = useState<Record<string, ChipResult>>({});
+  const [analyzeMetadata, setAnalyzeMetadata] = useState<Record<string, AnalyzeMetadata>>({});
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
   const [currentPromptId, setCurrentPromptId] = useState<string>('');
   const [selectedIndexes, setSelectedIndexes] = useState<number[]>([]);
@@ -446,6 +453,22 @@ export default function Home() {
           return;
         }
 
+        // 检查是否使用了模拟数据
+        if (data.metadata?.usedMockData) {
+          console.warn('[handleAnalyze] ⚠️ Used mock data instead of real API');
+          console.warn('[handleAnalyze] This means API key was empty or API call failed');
+          // 可以选择显示警告给用户
+          if (apiKey) {
+            console.error('[handleAnalyze] ❌ API key was provided but still used mock data!');
+            console.error('[handleAnalyze] This indicates the API call failed');
+            alert('⚠️ API调用失败，已使用模拟数据\n\n请检查API Key是否正确，或查看控制台日志');
+          } else {
+            console.log('[handleAnalyze] ℹ️ Used mock data (no API key configured)');
+          }
+        } else {
+          console.log('[handleAnalyze] ✅ Used real API:', data.metadata?.provider);
+        }
+
         console.log('[handleAnalyze] Setting result for screenshot:', screenshotId);
         console.log('[handleAnalyze] Chips:', data.data.chips);
         console.log('[handleAnalyze] Chips count:', data.data.chips.length);
@@ -457,9 +480,12 @@ export default function Home() {
           return updated;
         });
 
-        // 如果使用的是模拟数据，提示用户
-        if (!apiKey) {
-          console.warn('[Analyze] 使用模拟数据（未配置API Key）');
+        // 保存元数据
+        if (data.metadata) {
+          setAnalyzeMetadata(prev => ({
+            ...prev,
+            [screenshotId]: data.metadata
+          }));
         }
       } else {
         // 显示错误消息
@@ -1024,6 +1050,17 @@ export default function Home() {
 
                     {/* 右侧矩形区域 */}
                     <div className="w-[130px] h-[462px] bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col p-4">
+                      {/* 数据来源标记 */}
+                      {result && result.chips && result.chips.length > 0 && analyzeMetadata[screenshot.id] && (
+                        <div className={`mb-2 px-2 py-1 rounded text-xs text-center ${
+                          analyzeMetadata[screenshot.id].usedMockData
+                            ? 'bg-amber-100 text-amber-700 border border-amber-300'
+                            : 'bg-green-100 text-green-700 border border-green-300'
+                        }`}>
+                          {analyzeMetadata[screenshot.id].usedMockData ? '📝 模拟数据' : '🤖 GLM-4V生成'}
+                        </div>
+                      )}
+
                       {/* 上方：chips展示区（占据大部分空间） */}
                       <div className="flex-1 flex flex-col justify-end space-y-2 mb-4">
                         {result && result.chips && result.chips.length > 0 ? (
