@@ -394,6 +394,10 @@ export default function Home() {
   };
 
   const handleAnalyze = async (screenshotId: string) => {
+    console.log('[handleAnalyze] Starting analysis for screenshot:', screenshotId);
+    console.log('[handleAnalyze] API Key configured:', !!apiKey);
+    console.log('[handleAnalyze] Provider:', provider);
+
     setAnalyzing(prev => ({ ...prev, [screenshotId]: true }));
 
     try {
@@ -403,10 +407,35 @@ export default function Home() {
         body: JSON.stringify({ screenshotId, apiKey, provider }),
       });
 
+      console.log('[handleAnalyze] Response status:', res.status);
+
       const data = await res.json();
+      console.log('[handleAnalyze] Response data:', data);
 
       if (data.success) {
-        setResults(prev => ({ ...prev, [screenshotId]: data.data }));
+        // 验证返回的数据
+        if (!data.data) {
+          console.error('[handleAnalyze] No data in response');
+          alert('生成失败：返回数据格式错误');
+          return;
+        }
+
+        if (!data.data.chips || !Array.isArray(data.data.chips)) {
+          console.error('[handleAnalyze] Invalid chips:', data.data.chips);
+          alert('生成失败：chips数据格式错误');
+          return;
+        }
+
+        console.log('[handleAnalyze] Setting result for screenshot:', screenshotId);
+        console.log('[handleAnalyze] Chips:', data.data.chips);
+        console.log('[handleAnalyze] Chips count:', data.data.chips.length);
+        console.log('[handleAnalyze] Screen understanding:', data.data.screenUnderstanding);
+
+        setResults(prev => {
+          const updated = { ...prev, [screenshotId]: data.data };
+          console.log('[handleAnalyze] Updated results:', updated);
+          return updated;
+        });
 
         // 如果使用的是模拟数据，提示用户
         if (!apiKey) {
@@ -414,10 +443,11 @@ export default function Home() {
         }
       } else {
         // 显示错误消息
+        console.error('[handleAnalyze] API returned error:', data.error);
         alert(`生成失败：${data.error || '未知错误'}`);
       }
     } catch (error) {
-      console.error('[Analyze] Error:', error);
+      console.error('[handleAnalyze] Request failed:', error);
       alert('生成失败，请检查网络连接或重试');
     } finally {
       setAnalyzing(prev => ({ ...prev, [screenshotId]: false }));
@@ -976,7 +1006,7 @@ export default function Home() {
                     <div className="w-[130px] h-[462px] bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col p-4">
                       {/* 上方：chips展示区（占据大部分空间） */}
                       <div className="flex-1 flex flex-col justify-end space-y-2 mb-4">
-                        {result ? (
+                        {result && result.chips && result.chips.length > 0 ? (
                           result.chips.map((chip, chipIdx) => (
                             <div
                               key={chipIdx}
@@ -985,6 +1015,13 @@ export default function Home() {
                               {chip}
                             </div>
                           ))
+                        ) : result ? (
+                          <div className="h-full flex items-center justify-center">
+                            <div className="text-center text-slate-400 text-sm">
+                              <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                              未生成问题<br/>请重新生成
+                            </div>
+                          </div>
                         ) : (
                           <div className="h-full flex items-center justify-center">
                             <div className="text-center text-slate-400 text-sm">
