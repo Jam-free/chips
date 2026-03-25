@@ -242,7 +242,7 @@ function extractQuestions(text: string): string[] {
   }
 
   // 去重并只取前2个
-  const uniqueQuestions = [...new Set(questions)].slice(0, 2);
+  const uniqueQuestions = Array.from(new Set(questions)).slice(0, 2);
 
   console.log('[extractQuestions] 最终返回:', uniqueQuestions);
 

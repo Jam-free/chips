@@ -2,11 +2,6 @@ import { Screenshot, ChipResult, PromptTemplate } from '@/types';
 import { defaultPrompts } from './prompts';
 
 // 内存存储（Demo阶段）
-// 使用全局变量避免热重载时数据丢失
-declare global {
-  const dataStore: DataStore | undefined;
-}
-
 class DataStore {
   private screenshots: Map<string, Screenshot> = new Map();
   private results: Map<string, ChipResult[]> = new Map();
@@ -112,12 +107,15 @@ class DataStore {
   }
 }
 
-// 导出单例（使用全局变量避免热重载时数据丢失）
+// 内存存储（Demo阶段）
+let globalDataStore: DataStore | undefined;
+
+// 导出单例
 export function getDataStore(): DataStore {
-  if (!global.dataStore) {
-    global.dataStore = new DataStore();
+  if (!globalDataStore) {
+    globalDataStore = new DataStore();
   }
-  return global.dataStore;
+  return globalDataStore;
 }
 
 // 默认导出（向后兼容）
