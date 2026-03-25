@@ -48,9 +48,15 @@ export async function POST(request: NextRequest) {
     dataStore.addScreenshot(screenshot);
     console.log('[Upload API] Screenshot added to store:', screenshot.id);
 
+    // 返回时将Date转换为ISO字符串
+    const responseData = {
+      ...screenshot,
+      uploadedAt: screenshot.uploadedAt.toISOString()
+    };
+
     return NextResponse.json({
       success: true,
-      screenshot
+      screenshot: responseData
     });
   } catch (error) {
     console.error('[Upload API] Error:', error);
@@ -70,9 +76,29 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET() {
-  const screenshots = dataStore.getAllScreenshots();
-  console.log('GET /api/upload - returning screenshots:', screenshots.length);
-  return NextResponse.json({ success: true, screenshots });
+  try {
+    const screenshots = dataStore.getAllScreenshots();
+    console.log('GET /api/upload - returning screenshots:', screenshots.length);
+
+    // 确保每个截图都有必需的字段，并将Date转换为ISO字符串
+    const validScreenshots = screenshots
+      .filter(s => s && s.id && s.filename && s.imagePath && s.uploadedAt)
+      .map(s => ({
+        ...s,
+        uploadedAt: s.uploadedAt.toISOString() // 将Date转换为字符串
+      }));
+
+    return NextResponse.json({
+      success: true,
+      screenshots: validScreenshots
+    });
+  } catch (error) {
+    console.error('GET /api/upload - Error:', error);
+    return NextResponse.json({
+      success: true,
+      screenshots: []
+    });
+  }
 }
 
 export async function DELETE(request: NextRequest) {

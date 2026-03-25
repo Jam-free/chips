@@ -98,9 +98,20 @@ export default function Home() {
     try {
       const res = await fetch('/api/upload');
       const data = await res.json();
-      if (data.success) {
-        setScreenshots(data.screenshots);
-        if (data.screenshots.length > 0) {
+      if (data.success && data.screenshots) {
+        // 过滤掉无效的截图数据（兼容性处理）
+        // 并将ISO字符串日期转换回Date对象
+        const validScreenshots = data.screenshots
+          .filter((s: Screenshot) =>
+            s && s.id && s.imagePath && (s.imagePath.startsWith('data:') || s.imagePath.startsWith('/'))
+          )
+          .map((s: Screenshot) => ({
+            ...s,
+            uploadedAt: new Date(s.uploadedAt)
+          }));
+
+        setScreenshots(validScreenshots);
+        if (validScreenshots.length > 0) {
           setSelectedIndexes([0]);
         }
       }
@@ -192,7 +203,12 @@ export default function Home() {
 
           if (data.success) {
             console.log('Upload success:', data.screenshot);
-            newScreenshots.push(data.screenshot);
+            // 将ISO字符串日期转换回Date对象
+            const screenshotWithDate = {
+              ...data.screenshot,
+              uploadedAt: new Date(data.screenshot.uploadedAt)
+            };
+            newScreenshots.push(screenshotWithDate);
 
             // 更新为成功
             setUploadProgress(prev => prev.map((p, idx) =>
