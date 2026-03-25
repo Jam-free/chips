@@ -23,12 +23,81 @@ import {
 import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 import { Screenshot, ChipResult, PromptTemplate } from '@/types';
 import { QRCodeButton } from '@/components/qrcode-button';
+import { compressImage } from '@/lib/image-compress';
 
 interface UploadProgress {
   fileName: string;
   progress: number;
-  status: 'pending' | 'uploading' | 'success' | 'error';
+  status: 'pending' | 'compressing' | 'uploading' | 'success' | 'error';
   error?: string;
+}
+
+// 上传单个文件（带重试）
+async function uploadFileWithRetry(
+  file: File,
+  maxRetries: number = 2
+): Promise<{ success: boolean; screenshot?: Screenshot; error?: string }> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      console.log(`[Upload] Attempt ${attempt + 1}/${maxRetries + 1} for ${file.name}`);
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+
+      if (data.success && data.screenshot) {
+        const screenshot: Screenshot = {
+          id: data.screenshot.id,
+          filename: data.screenshot.filename,
+          imagePath: data.screenshot.imagePath,
+          uploadedAt: new Date(data.screenshot.uploadedAt),
+          imageHash: data.screenshot.imageHash
+        };
+        return { success: true, screenshot };
+      } else {
+        throw new Error(data.error || '上传失败');
+      }
+    } catch (error: unknown) {
+      const isLastAttempt = attempt === maxRetries;
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error(`[Upload] Timeout on attempt ${attempt + 1} for ${file.name}`);
+        if (!isLastAttempt) {
+          // 等待后重试（指数退避）
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+          continue;
+        }
+        return { success: false, error: '上传超时，请检查网络或压缩图片后重试' };
+      }
+
+      if (isLastAttempt) {
+        return { success: false, error: errorMessage };
+      }
+
+      console.warn(`[Upload] Attempt ${attempt + 1} failed for ${file.name}:`, errorMessage);
+      // 等待后重试
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+    }
+  }
+
+  return { success: false, error: '上传失败，已达最大重试次数' };
 }
 
 export default function Home() {
@@ -175,8 +244,8 @@ export default function Home() {
 
     console.log('[handleFileUpload] Starting upload, files:', files.length);
 
-    // 检查文件大小
-    const MAX_FILE_SIZE = 3.5 * 1024 * 1024; // 3.5MB
+    // 检查文件大小（检查原始文件）
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB（压缩前）
     const oversizedFiles: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
@@ -186,14 +255,12 @@ export default function Home() {
     }
 
     if (oversizedFiles.length > 0) {
-      alert(`⚠️ 以下文件超过3.5MB限制，无法上传：\n${oversizedFiles.join('\n')}\n\n建议：压缩图片或选择较小的文件`);
+      alert(`⚠️ 以下文件超过10MB限制，无法上传：\n${oversizedFiles.join('\n')}\n\n建议：先压缩图片或选择较小的文件`);
       return;
     }
 
     setIsUploading(true);
     const newScreenshots: Screenshot[] = [];
-
-    // 记录当前截图数量，用于后续选中
     const currentScreenshotCount = screenshots.length;
 
     // 初始化进度
@@ -205,80 +272,74 @@ export default function Home() {
     setUploadProgress(initialProgress);
 
     try {
+      // 步骤1: 压缩所有图片
+      console.log('[handleFileUpload] Step 1: Compressing images...');
+      const compressedFiles: File[] = [];
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
 
-        // 更新状态为上传中
+        // 更新状态为压缩中
         setUploadProgress(prev => prev.map((p, idx) =>
-          idx === i ? { ...p, status: 'uploading', progress: 10 } : p
+          idx === i ? { ...p, status: 'compressing' } : p
         ));
 
         try {
-          // 使用AbortController实现超时控制
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+          const compressed = await compressImage(file, 1); // 压缩到1MB以下
+          compressedFiles.push(compressed);
+          console.log(`[handleFileUpload] Compressed ${file.name}: ${(file.size / 1024).toFixed(2)}KB → ${(compressed.size / 1024).toFixed(2)}KB`);
+        } catch (error) {
+          console.error(`[handleFileUpload] Compression failed for ${file.name}:`, error);
+          compressedFiles.push(file); // 压缩失败使用原文件
+        }
+      }
 
-          const formData = new FormData();
-          formData.append('file', file);
+      // 步骤2: 并发上传（2个并发）
+      console.log('[handleFileUpload] Step 2: Uploading with concurrency...');
+      const CONCURRENCY = 2;
+      const uploadPromises: Promise<{ success: boolean; screenshot?: Screenshot; error?: string; index: number }>[] = [];
 
-          const res = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal
-          });
+      for (let i = 0; i < compressedFiles.length; i++) {
+        const file = compressedFiles[i];
 
-          clearTimeout(timeoutId);
+        // 更新状态为上传中
+        setUploadProgress(prev => prev.map((p, idx) =>
+          idx === i ? { ...p, status: 'uploading' } : p
+        ));
 
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-          }
+        const uploadPromise = uploadFileWithRetry(file, 2).then(result => ({
+          ...result,
+          index: i
+        }));
 
-          const data = await res.json();
-          console.log('[handleFileUpload] Response:', data);
+        uploadPromises.push(uploadPromise);
 
-          if (data.success && data.screenshot) {
-            // 将ISO字符串日期转换回Date对象
-            const screenshotWithDate: Screenshot = {
-              id: data.screenshot.id,
-              filename: data.screenshot.filename,
-              imagePath: data.screenshot.imagePath,
-              uploadedAt: new Date(data.screenshot.uploadedAt),
-              imageHash: data.screenshot.imageHash
-            };
+        // 达到并发数时，等待一批完成
+        if (uploadPromises.length >= CONCURRENCY || i === compressedFiles.length - 1) {
+          const results = await Promise.all(uploadPromises);
 
-            console.log('[handleFileUpload] Screenshot created:', screenshotWithDate);
-            newScreenshots.push(screenshotWithDate);
+          // 处理结果
+          for (const result of results) {
+            if (result.success && result.screenshot) {
+              console.log('[handleFileUpload] Upload success:', result.screenshot.filename);
+              newScreenshots.push(result.screenshot);
 
-            // 更新为成功
-            setUploadProgress(prev => prev.map((p, idx) =>
-              idx === i ? { ...p, status: 'success', progress: 100 } : p
-            ));
-          } else {
-            const errorMsg = data.error || '上传失败';
-            console.error('[handleFileUpload] Upload failed:', errorMsg);
-
-            // 更新为失败
-            setUploadProgress(prev => prev.map((p, idx) =>
-              idx === i ? { ...p, status: 'error', error: errorMsg } : p
-            ));
-          }
-        } catch (error: unknown) {
-          let errorMsg = '上传失败';
-
-          if (error instanceof Error) {
-            if (error.name === 'AbortError') {
-              errorMsg = '上传超时（30秒），请检查网络或压缩图片后重试';
+              // 更新为成功
+              setUploadProgress(prev => prev.map((p, idx) =>
+                idx === result.index ? { ...p, status: 'success' } : p
+              ));
             } else {
-              errorMsg = error.message;
+              console.error('[handleFileUpload] Upload failed:', result.error);
+
+              // 更新为失败
+              setUploadProgress(prev => prev.map((p, idx) =>
+                idx === result.index ? { ...p, status: 'error', error: result.error } : p
+              ));
             }
           }
 
-          console.error('[handleFileUpload] Upload error:', error);
-
-          // 更新为失败
-          setUploadProgress(prev => prev.map((p, idx) =>
-            idx === i ? { ...p, status: 'error', error: errorMsg } : p
-          ));
+          // 清空已完成的promises
+          uploadPromises.length = 0;
         }
       }
 
@@ -291,7 +352,7 @@ export default function Home() {
           return updated;
         });
 
-        // 自动选中第一个新上传的截图（使用旧的长度）
+        // 自动选中第一个新上传的截图
         setSelectedIndexes([currentScreenshotCount]);
       }
 
@@ -457,7 +518,9 @@ export default function Home() {
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
             <div className="flex items-center gap-3 mb-4">
               <Loader2 className="h-6 w-6 text-blue-600 animate-spin" />
-              <h3 className="text-lg font-semibold text-slate-900">上传中...</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                {uploadProgress.some(p => p.status === 'compressing') ? '压缩图片...' : '上传中...'}
+              </h3>
             </div>
 
             <div className="space-y-3 max-h-60 overflow-y-auto">
@@ -468,10 +531,11 @@ export default function Home() {
                       {progress.fileName}
                     </span>
                     <span className="text-xs text-slate-500 ml-2 flex-shrink-0">
-                      {progress.status === 'success' && '✅'}
-                      {progress.status === 'error' && '❌'}
-                      {progress.status === 'uploading' && '⏳'}
-                      {progress.status === 'pending' && '⏳'}
+                      {progress.status === 'compressing' && '🗜️ 压缩中'}
+                      {progress.status === 'pending' && '⏳ 等待'}
+                      {progress.status === 'uploading' && '📤 上传中'}
+                      {progress.status === 'success' && '✅ 成功'}
+                      {progress.status === 'error' && '❌ 失败'}
                     </span>
                   </div>
 
@@ -488,7 +552,9 @@ export default function Home() {
 
             <div className="mt-4 pt-4 border-t border-slate-200">
               <p className="text-xs text-slate-500 text-center">
-                正在上传图片，请稍候...
+                {uploadProgress.some(p => p.status === 'compressing')
+                  ? '正在压缩图片，请稍候...（压缩后上传更快）'
+                  : '正在上传图片到服务器...'}
               </p>
             </div>
           </div>

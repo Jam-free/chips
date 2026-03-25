@@ -125,7 +125,7 @@ export default function MobileUploadPage() {
               {/* 说明 */}
               <div className="text-xs text-muted-foreground space-y-1">
                 <p>• 支持 PNG、JPG、JPEG 格式</p>
-                <p>• 单张图片不超过 5MB</p>
+                <p>• 单张图片不超过 10MB（自动压缩）</p>
                 <p>• 上传后可在PC端查看生成结果</p>
               </div>
             </div>

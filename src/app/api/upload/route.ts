@@ -22,13 +22,13 @@ export async function POST(request: NextRequest) {
       type: file.type
     });
 
-    // 检查文件大小（3.5MB）
-    const MAX_SIZE = 3.5 * 1024 * 1024;
+    // 检查文件大小（5MB - 压缩后的安全值）
+    const MAX_SIZE = 5 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       console.error('[Upload API] File too large:', file.size);
       return NextResponse.json({
         success: false,
-        error: `文件过大（${(file.size / 1024 / 1024).toFixed(2)}MB），请压缩后上传`
+        error: `文件过大（${(file.size / 1024 / 1024).toFixed(2)}MB），请先压缩图片`
       }, { status: 400 });
     }
 
