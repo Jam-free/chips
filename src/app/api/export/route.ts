@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dataStore } from '@/lib/store';
 import * as XLSX from 'xlsx';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);

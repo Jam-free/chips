@@ -7,23 +7,21 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { screenshotId, apiKey, provider } = body;
+    const { screenshotId, apiKey, provider, imageData, filename } = body;
 
     console.log('[DEBUG API] ========== Debug Request Start ==========');
-    console.log('[DEBUG API] Time:', new Date().toISOString());
     console.log('[DEBUG API] Screenshot ID:', screenshotId);
     console.log('[DEBUG API] Provider:', provider);
-    console.log('[DEBUG API] API Key length:', apiKey?.length);
     console.log('[DEBUG API] Has API Key:', !!apiKey);
 
-    // 获取截图
-    const screenshot = dataStore.getScreenshot(screenshotId);
+    // 获取截图（优先 store，兜底用前端传来的数据）
+    let screenshot = dataStore.getScreenshot(screenshotId);
+    if (!screenshot && imageData) {
+      screenshot = { id: screenshotId, filename: filename || 'debug.jpg', uploadedAt: new Date(), imagePath: imageData };
+      dataStore.addScreenshot(screenshot);
+    }
     if (!screenshot) {
-      console.error('[DEBUG API] Screenshot not found');
-      return NextResponse.json({
-        success: false,
-        error: '截图不存在'
-      });
+      return NextResponse.json({ success: false, error: '截图数据丢失，请重新上传' });
     }
 
     console.log('[DEBUG API] Screenshot found:', screenshot.id);

@@ -409,11 +409,19 @@ export default function Home() {
 
     setAnalyzing(prev => ({ ...prev, [screenshotId]: true }));
 
+    const screenshot = screenshots.find(s => s.id === screenshotId);
+
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ screenshotId, apiKey, provider }),
+        body: JSON.stringify({
+          screenshotId,
+          apiKey,
+          provider,
+          imageData: screenshot?.imagePath,
+          filename: screenshot?.filename,
+        }),
       });
 
       const data = await res.json();
@@ -575,15 +583,15 @@ export default function Home() {
 
   const handleDebug = async (screenshotId: string) => {
     if (!apiKey.trim()) {
-      alert('⚠️ 调试功能需要配置API Key\n\n请先在设置中配置API Key');
+      alert('调试功能需要配置API Key，请先在设置中配置');
       return;
     }
 
-    console.log('[handleDebug] Starting debug for screenshot:', screenshotId);
-    alert('🔍 正在调试...\n\n请查看浏览器控制台（F12）查看详细信息\n\n调试可能需要30-60秒...');
+    const debugScreenshot = screenshots.find(s => s.id === screenshotId);
+    alert('正在调试…请查看浏览器控制台，可能需要30-60秒');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 65000); // 65秒超时（前端比后端多10秒）
+    const timeoutId = setTimeout(() => controller.abort(), 65000);
 
     try {
       const res = await Promise.race([
@@ -593,7 +601,9 @@ export default function Home() {
           body: JSON.stringify({
             screenshotId,
             apiKey,
-            provider
+            provider,
+            imageData: debugScreenshot?.imagePath,
+            filename: debugScreenshot?.filename,
           }),
           signal: controller.signal
         }),

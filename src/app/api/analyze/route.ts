@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callMiniMaxVisionAPI, callGLMVisionAPI } from '@/lib/server-vlm';
 import { dataStore } from '@/lib/store';
-import { ChipResult } from '@/types';
+import { ChipResult, Screenshot } from '@/types';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { screenshotId, apiKey, provider, force, testImage } = body;
+    const { screenshotId, apiKey, provider, force, testImage, imageData, filename } = body;
 
-    console.log('[Analyze] Request:', { screenshotId, hasApiKey: !!apiKey, provider, force, hasTestImage: !!testImage });
+    console.log('[Analyze] Request:', {
+      screenshotId,
+      hasApiKey: !!apiKey,
+      provider,
+      force,
+      hasTestImage: !!testImage,
+      hasImageData: !!imageData
+    });
 
     if (!screenshotId && !testImage) {
       return NextResponse.json({ success: false, error: '缺少screenshotId' }, { status: 400 });
@@ -16,7 +23,6 @@ export async function POST(request: NextRequest) {
 
     // ── 测试模式 ──
     if (testImage && apiKey) {
-      console.log('[Analyze] Test mode, provider:', provider);
       try {
         if (provider === 'minimax') {
           await callMiniMaxVisionAPI(testImage, '测试：请简单描述这张图片', apiKey);
@@ -25,7 +31,6 @@ export async function POST(request: NextRequest) {
         }
         return NextResponse.json({ success: true, test: true });
       } catch (error) {
-        console.error('[Analyze] Test failed:', error);
         return NextResponse.json({
           success: false,
           error: error instanceof Error ? error.message : 'API调用失败'
@@ -33,10 +38,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── 获取截图 ──
-    const screenshot = dataStore.getScreenshot(screenshotId);
+    // ── 获取截图（优先 store，兜底用前端传来的数据恢复） ──
+    let screenshot = dataStore.getScreenshot(screenshotId);
+
+    if (!screenshot && imageData) {
+      console.log('[Analyze] Screenshot not in store, recovering from request imageData');
+      screenshot = {
+        id: screenshotId,
+        filename: filename || 'recovered.jpg',
+        uploadedAt: new Date(),
+        imagePath: imageData,
+      } satisfies Screenshot;
+      dataStore.addScreenshot(screenshot);
+    }
+
     if (!screenshot) {
-      return NextResponse.json({ success: false, error: '截图不存在（可能页面已刷新）' }, { status: 404 });
+      return NextResponse.json({
+        success: false,
+        error: '截图数据丢失，请重新上传'
+      }, { status: 404 });
     }
 
     // ── 获取当前prompt ──
@@ -65,15 +85,12 @@ export async function POST(request: NextRequest) {
     let usedMockData = false;
 
     if (!apiKey) {
-      // 没有API Key -> mock
-      console.log('[Analyze] No API key, using mock data');
       await new Promise(resolve => setTimeout(resolve, 800));
       screenUnderstanding = '未配置API Key，使用模拟数据';
       chips = ['这个功能怎么用？', '有什么设置选项？'];
       usedMockData = true;
     } else {
-      // 有API Key -> 真实调用，失败时向前端报错而不是静默回落
-      console.log('[Analyze] Calling real VLM:', provider);
+      console.log('[Analyze] Calling VLM:', provider);
       const callStart = Date.now();
 
       try {
@@ -83,10 +100,8 @@ export async function POST(request: NextRequest) {
 
         screenUnderstanding = result.screenUnderstanding;
         chips = result.chips;
-
         console.log('[Analyze] VLM success in', Date.now() - callStart, 'ms, chips:', chips);
       } catch (error) {
-        // API调用失败 -> 返回错误，让用户知道真实原因
         const errMsg = error instanceof Error ? error.message : String(error);
         console.error('[Analyze] VLM failed:', errMsg);
         return NextResponse.json({
