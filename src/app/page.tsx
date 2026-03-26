@@ -20,7 +20,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight, AlertCircle, Loader2, FileText } from 'lucide-react';
 import { Screenshot, ChipResult, PromptTemplate } from '@/types';
 import { QRCodeButton } from '@/components/qrcode-button';
 import { compressImage } from '@/lib/image-compress';
