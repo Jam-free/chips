@@ -511,7 +511,6 @@ export default function Home() {
 
   // 逐个重新生成所有截图
   const regenerateAllScreenshots = async () => {
-    const total = screenshots.length;
     let success = 0;
     let failed = 0;
 
