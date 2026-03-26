@@ -154,14 +154,11 @@ export default function Home() {
   const [promptName, setPromptName] = useState('');
   const [promptContent, setPromptContent] = useState('');
 
-  // 当打开对话框时，默认加载当前prompt
+  // 当打开对话框时，不默认加载到编辑区（只显示列表）
   const handleOpenPromptDialog = () => {
-    const current = prompts.find(p => p.id === currentPromptId);
-    if (current && !editingPrompt) {
-      setEditingPrompt(current);
-      setPromptName(current.name);
-      setPromptContent(current.content);
-    }
+    setEditingPrompt(null);  // 明确设置为null，不进入编辑态
+    setPromptName('');
+    setPromptContent('');
     setPromptDialogOpen(true);
   };
 
@@ -470,6 +467,19 @@ export default function Home() {
   };
 
   const handleSwitchPrompt = async (promptId: string) => {
+    const targetPrompt = prompts.find(p => p.id === promptId);
+    if (!targetPrompt) {
+      alert('Prompt不存在');
+      return;
+    }
+
+    // 验证prompt内容
+    const validation = validatePrompt(targetPrompt.content);
+    if (!validation.isValid) {
+      alert(`⚠️ 无法切换到此Prompt：\n\n${validation.error}\n\n请选择其他有效的Prompt`);
+      return;
+    }
+
     try {
       await fetch('/api/prompts/switch', {
         method: 'POST',
@@ -480,32 +490,67 @@ export default function Home() {
       setCurrentPromptId(promptId);
       setResults({});
 
-      // 如果有截图，自动重新生成
+      // 关闭对话框
+      setPromptDialogOpen(false);
+
+      // 如果有截图，提示用户是否重新生成
       if (screenshots.length > 0) {
-        const confirmed = confirm('已切换Prompt，是否重新生成所有截图的话题？');
-        if (confirmed) {
-          try {
-            const res = await fetch('/api/prompts/switch', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey, provider }),
-            });
-            const data = await res.json();
-            if (data.success) {
-              loadScreenshots();
-              alert(`✅ 重新生成完成（${data.results?.length || 0}张）`);
-            }
-          } catch (err) {
-            console.error('Regenerate error:', err);
+        setTimeout(() => {
+          const confirmed = confirm(`✅ 已切换到「${targetPrompt.name}」\n\n是否重新生成所有截图的话题？`);
+          if (confirmed) {
+            // 逐个生成，避免并发过多
+            regenerateAllScreenshots();
           }
-        }
+        }, 300);
       }
     } catch (error) {
       console.error('Switch prompt error:', error);
+      alert('切换失败');
     }
   };
 
+  // 逐个重新生成所有截图
+  const regenerateAllScreenshots = async () => {
+    const total = screenshots.length;
+    let success = 0;
+    let failed = 0;
+
+    for (let i = 0; i < screenshots.length; i++) {
+      const screenshot = screenshots[i];
+      try {
+        await handleAnalyze(screenshot.id);
+        success++;
+      } catch (error) {
+        console.error(`Regenerate failed for ${screenshot.id}:`, error);
+        failed++;
+      }
+    }
+
+    alert(`✅ 重新生成完成\n\n成功: ${success}张\n失败: ${failed}张`);
+  };
+
+  // 验证prompt内容是否有效
+  const validatePrompt = (content: string): { isValid: boolean; error: string } => {
+    if (!content || content.trim().length < 100) {
+      return { isValid: false, error: 'Prompt内容不能少于100字' };
+    }
+    if (content.length > 10000) {
+      return { isValid: false, error: 'Prompt内容不能超过10000字' };
+    }
+    if (!content.includes('screen_briefing') || !content.includes('chips')) {
+      return { isValid: false, error: 'Prompt必须包含输出格式说明（screen_briefing和chips字段）' };
+    }
+    return { isValid: true, error: '' };
+  };
+
   const handleSavePrompt = async () => {
+    // 验证prompt内容
+    const validation = validatePrompt(promptContent);
+    if (!validation.isValid) {
+      alert(`⚠️ ${validation.error}`);
+      return;
+    }
+
     try {
       if (editingPrompt) {
         await fetch('/api/prompts', {
@@ -532,6 +577,8 @@ export default function Home() {
       setEditingPrompt(null);
       setPromptName('');
       setPromptContent('');
+
+      alert('✅ Prompt保存成功！');
     } catch (error) {
       console.error('Save prompt error:', error);
       alert('保存失败');
@@ -720,10 +767,10 @@ export default function Home() {
       {/* 上传进度对话框 */}
       {isUploading && uploadProgress.length > 0 && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-4 sm:p-6">
             <div className="flex items-center gap-3 mb-4">
-              <Loader2 className="h-6 w-6 text-blue-600 animate-spin" />
-              <h3 className="text-lg font-semibold text-slate-900">
+              <Loader2 className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600 animate-spin" />
+              <h3 className="text-base sm:text-lg font-semibold text-slate-900">
                 {uploadProgress.some(p => p.status === 'compressing') ? '压缩图片...' : '上传中...'}
               </h3>
             </div>
@@ -767,20 +814,19 @@ export default function Home() {
       )}
 
       {/* 顶部导航栏 - 简洁版 */}
-      <header className="h-16 border-b bg-card fixed top-0 w-full z-50">
-        <div className="container mx-auto px-4 h-full">
-          <div className="flex items-center justify-between h-full">
-            <div className="flex items-center gap-3">
-              <h1 className="text-lg font-bold sm:text-xl">🎯 屏幕话题生成器</h1>
+      <header className="h-14 sm:h-16 border-b bg-card fixed top-0 w-full z-50">
+        <div className="container mx-auto px-2 sm:px-4 h-full">
+          <div className="flex items-center justify-between h-full gap-2">
+            <div className="flex items-center gap-1 sm:gap-3 min-w-0">
+              <h1 className="text-base sm:text-lg font-bold truncate">🎯 话题生成器</h1>
               <span className="text-xs text-muted-foreground hidden sm:inline">v1.0</span>
             </div>
 
-            <div className="flex items-center gap-2">
-              {/* 调试按钮 */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8"
+                className="h-7 sm:h-8 text-xs sm:text-sm hidden"  // 完全隐藏调试按钮
                 onClick={() => {
                   if (screenshots.length === 0) {
                     alert('请先上传截图');
@@ -793,12 +839,12 @@ export default function Home() {
                 🔍 调试
               </Button>
 
-              {/* Prompt管理按钮 */}
+              {/* Prompt管理按钮 - 使用FileText图标 */}
               <Dialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8" onClick={handleOpenPromptDialog}>
-                    <Settings className="h-4 w-4 mr-1" />
-                    Prompt
+                  <Button variant="outline" size="sm" className="h-7 sm:h-8 px-2 sm:px-3" onClick={handleOpenPromptDialog}>
+                    <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4 sm:mr-1" />
+                    <span className="hidden xs:inline">Prompt</span>
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto !bg-white !text-slate-900">
@@ -952,9 +998,9 @@ export default function Home() {
               {/* 设置按钮 */}
               <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8">
-                    <Settings className="h-4 w-4 mr-1" />
-                    设置
+                  <Button variant="outline" size="sm" className="h-7 sm:h-8 px-2 sm:px-3">
+                    <Settings className="h-3.5 w-3.5 sm:h-4 sm:w-4 sm:mr-1" />
+                    <span className="hidden xs:inline">设置</span>
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-md !bg-white !text-slate-900 border-slate-200">
@@ -1057,14 +1103,14 @@ export default function Home() {
       </header>
 
       {/* 主内容区 - 截图预览 */}
-      <main className="container mx-auto px-4" style={{ marginTop: '5rem', marginBottom: '6rem' }}>
+      <main className="container mx-auto px-2 sm:px-4" style={{ marginTop: '4.5rem', marginBottom: '5rem' }}>
         {screenshots.length === 0 ? (
           // 空状态
-          <div className="min-h-[60vh] flex items-center justify-center">
-            <Card className="p-12 text-center max-w-md">
-              <Upload className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
-              <h2 className="text-xl font-semibold mb-2">开始使用</h2>
-              <p className="text-muted-foreground mb-6">
+          <div className="min-h-[50vh] sm:min-h-[60vh] flex items-center justify-center">
+            <Card className="p-6 sm:p-12 text-center max-w-md">
+              <Upload className="h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 text-muted-foreground" />
+              <h2 className="text-lg sm:text-xl font-semibold mb-2">开始使用</h2>
+              <p className="text-sm sm:text-base text-muted-foreground mb-4 sm:mb-6">
                 上传手机截图，AI将自动生成用户可能问的问题
               </p>
               <div className="flex flex-col gap-3">
@@ -1089,8 +1135,8 @@ export default function Home() {
             </Card>
           </div>
         ) : (
-          // 截图展示区 - 图片+信息区域并排
-          <div className="flex items-center justify-center gap-6 overflow-x-auto pb-4">
+          // 截图展示区 - 移动端垂直排列，桌面端水平
+          <div className="flex items-center justify-center gap-4 sm:gap-6 overflow-x-auto pb-4 flex-col sm:flex-row">
             {displayScreenshots.map((screenshot) => {
               const result = results[screenshot.id];
               const isAnalyzing = analyzing[screenshot.id];
@@ -1100,10 +1146,10 @@ export default function Home() {
                   key={screenshot.id}
                   className="flex-shrink-0 relative group"
                 >
-                  {/* 图片+信息区域 容器 */}
-                  <div className="flex shadow-xl rounded-2xl overflow-hidden">
+                  {/* 图片+信息区域 容器 - 移动端垂直，桌面端水平 */}
+                  <div className="flex flex-col sm:flex-row shadow-xl rounded-2xl overflow-hidden">
                     {/* 主体图片 */}
-                    <div className="relative w-[260px] h-[462px] bg-muted flex items-center justify-center">
+                    <div className="relative w-full sm:w-[240px] h-[300px] sm:h-[428px] bg-muted flex items-center justify-center">
                       <img
                         src={screenshot.imagePath}
                         alt={screenshot.filename}
@@ -1116,15 +1162,15 @@ export default function Home() {
                           e.stopPropagation();
                           handleDelete(screenshot.id);
                         }}
-                        className="absolute top-3 right-3 h-8 w-8 bg-black/70 hover:bg-red-600 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-all"
+                        className="absolute top-2 sm:top-3 right-2 sm:right-3 h-7 w-7 sm:h-8 sm:w-8 bg-black/70 hover:bg-red-600 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-all"
                       >
-                        <X className="h-4 w-4" />
+                        <X className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                       </button>
 
                       {/* 完成标记 */}
                       {result && (
-                        <div className="absolute top-3 left-3 h-8 w-8 bg-green-500 rounded-full flex items-center justify-center text-white shadow-lg">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="absolute top-2 sm:top-3 left-2 sm:left-3 h-7 w-7 sm:h-8 sm:w-8 bg-green-500 rounded-full flex items-center justify-center text-white shadow-lg">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                           </svg>
                         </div>
@@ -1132,7 +1178,7 @@ export default function Home() {
                     </div>
 
                     {/* 右侧矩形区域 */}
-                    <div className="w-[130px] h-[462px] bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col p-4">
+                    <div className="w-full sm:w-[120px] h-[280px] sm:h-[428px] bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col p-3 sm:p-4">
                       {/* 数据来源标记 */}
                       {result && result.chips && result.chips.length > 0 && analyzeMetadata[screenshot.id] && (
                         <div className={`mb-2 px-2 py-1 rounded text-xs text-center ${
@@ -1145,12 +1191,12 @@ export default function Home() {
                       )}
 
                       {/* 上方：chips展示区（占据大部分空间） */}
-                      <div className="flex-1 flex flex-col justify-end space-y-2 mb-4">
+                      <div className="flex-1 flex flex-col justify-end space-y-2.5 mb-4">
                         {result && result.chips && result.chips.length > 0 ? (
                           result.chips.map((chip, chipIdx) => (
                             <div
                               key={chipIdx}
-                              className="bg-white rounded-xl px-3 py-3 shadow-sm text-sm font-medium text-slate-800 leading-snug text-left"
+                              className="bg-white rounded-2xl px-4 py-3.5 shadow-lg border border-slate-200 hover:border-blue-300 text-sm font-medium text-slate-800 leading-snug text-left cursor-pointer transition-all"
                             >
                               {chip}
                             </div>
@@ -1175,7 +1221,7 @@ export default function Home() {
                       {/* 下方：生成按钮 */}
                       <div>
                         {!apiKey && !result && (
-                          <div className="mb-2 px-2 py-1 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700 text-center">
+                          <div className="mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 text-center">
                             💡 未配置API Key，将使用模拟数据
                           </div>
                         )}
@@ -1183,7 +1229,7 @@ export default function Home() {
                           <div className="space-y-2">
                             <Button
                               disabled
-                              className="w-full h-12 rounded-xl bg-blue-600 text-white"
+                              className="w-full h-14 rounded-2xl bg-blue-600 text-white"
                             >
                               <RefreshCw className="h-5 w-5 mr-2 animate-spin" />
                               {apiKey ? 'AI分析中...' : '生成中...'}
@@ -1199,14 +1245,19 @@ export default function Home() {
                               handleAnalyze(screenshot.id);
                             }}
                             disabled={isAnalyzing}
-                            className={`w-full h-12 rounded-xl font-semibold shadow-md transition-all ${
+                            className={`w-full h-14 rounded-2xl font-semibold shadow-md transition-all ${
                               result
                                 ? 'bg-white hover:bg-slate-50 text-slate-700 border-2 border-slate-200'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-xl'
+                                : 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg hover:shadow-xl'
                             }`}
                           >
-                            {result ? '重新生成' : '生成'}
+                            {result ? '↻ 重新生成' : '✨ 生成话题'}
                           </Button>
+                        )}
+                        {isAnalyzing && (
+                          <p className="text-xs text-slate-500 text-center mt-2">
+                            {provider === 'minimax' ? '正在调用MiniMax分析图片（约10-20秒）' : '正在调用GLM-4V分析图片（约10-20秒）'}
+                          </p>
                         )}
                       </div>
                     </div>

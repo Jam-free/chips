@@ -67,3 +67,16 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Custom xs breakpoint for small mobile devices */
+@media (min-width: 380px) {
+  .xs\:inline {
+    display: inline;
+  }
+  .xs\:block {
+    display: block;
+  }
+  .xs\:flex {
+    display: flex;
+  }
+}
