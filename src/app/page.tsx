@@ -307,7 +307,12 @@ export default function Home() {
         ));
 
         try {
-          const compressed = await compressImage(file, 1); // 压缩到1MB以下
+          // 检测是否为移动设备，使用不同的压缩目标
+          const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent) ||
+                           window.innerWidth <= 768;
+          const targetSizeMB = isMobile ? 0.5 : 1;  // 手机500KB，桌面1MB
+
+          const compressed = await compressImage(file, targetSizeMB);
           compressedFiles.push(compressed);
           console.log(`[handleFileUpload] Compressed ${file.name}: ${(file.size / 1024).toFixed(2)}KB → ${(compressed.size / 1024).toFixed(2)}KB`);
         } catch (error) {
