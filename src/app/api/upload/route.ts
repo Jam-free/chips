@@ -8,6 +8,9 @@ export async function POST(request: NextRequest) {
   console.log('[Upload API] Starting upload...');
 
   try {
+    const { searchParams } = new URL(request.url);
+    const lite = searchParams.get('lite') === '1';
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
 
@@ -49,10 +52,16 @@ export async function POST(request: NextRequest) {
     console.log('[Upload API] Screenshot added to store:', screenshot.id);
 
     // 返回时将Date转换为ISO字符串
-    const responseData = {
-      ...screenshot,
-      uploadedAt: screenshot.uploadedAt.toISOString()
-    };
+    const responseData = lite
+      ? {
+          id: screenshot.id,
+          filename: screenshot.filename,
+          uploadedAt: screenshot.uploadedAt.toISOString()
+        }
+      : {
+          ...screenshot,
+          uploadedAt: screenshot.uploadedAt.toISOString()
+        };
 
     return NextResponse.json({
       success: true,

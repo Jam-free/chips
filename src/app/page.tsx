@@ -151,14 +151,19 @@ export default function Home() {
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<PromptTemplate | null>(null);
+  const [viewingPrompt, setViewingPrompt] = useState<PromptTemplate | null>(null);
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [promptName, setPromptName] = useState('');
   const [promptContent, setPromptContent] = useState('');
 
   // 当打开对话框时，不默认加载到编辑区（只显示列表）
   const handleOpenPromptDialog = () => {
-    setEditingPrompt(null);  // 明确设置为null，不进入编辑态
+    const current = prompts.find(p => p.id === currentPromptId) || null;
+    setViewingPrompt(current);
+    setEditingPrompt(null);
+    setIsEditingPrompt(false);
     setPromptName('');
-    setPromptContent('');
+    setPromptContent(current?.content || '');
     setPromptDialogOpen(true);
   };
 
@@ -552,7 +557,7 @@ export default function Home() {
 
     try {
       if (editingPrompt) {
-        await fetch('/api/prompts', {
+        const res = await fetch('/api/prompts', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -561,21 +566,31 @@ export default function Home() {
             content: promptContent,
           }),
         });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        // 保存后回到“查看态”
+        setViewingPrompt({ ...editingPrompt, name: promptName || editingPrompt.name, content: promptContent });
       } else {
-        await fetch('/api/prompts', {
+        const res = await fetch('/api/prompts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: promptName, content: promptContent }),
         });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data?.success && data?.prompt) {
+          setViewingPrompt(data.prompt as PromptTemplate);
+        }
       }
 
       // 重新加载prompts
       await loadPrompts();
 
-      // 清空编辑状态
+      // 退出编辑态
+      setIsEditingPrompt(false);
       setEditingPrompt(null);
       setPromptName('');
-      setPromptContent('');
+      setPromptContent(promptContent);
 
       alert('✅ Prompt保存成功！');
     } catch (error) {
@@ -632,97 +647,6 @@ export default function Home() {
     }
   };
 
-  const handleDebug = async (screenshotId: string) => {
-    if (!apiKey.trim()) {
-      alert('调试功能需要配置API Key，请先在设置中配置');
-      return;
-    }
-
-    const debugScreenshot = screenshots.find(s => s.id === screenshotId);
-    alert('正在调试…请查看浏览器控制台，可能需要30-60秒');
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 65000);
-
-    try {
-      const res = await Promise.race([
-        fetch('/api/debug', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            screenshotId,
-            apiKey,
-            provider,
-            imageData: debugScreenshot?.imagePath,
-            filename: debugScreenshot?.filename,
-          }),
-          signal: controller.signal
-        }),
-        new Promise<Response>((_, reject) =>
-          setTimeout(() => reject(new Error('调试请求超时（65秒）')), 65000)
-        )
-      ]);
-
-      clearTimeout(timeoutId);
-
-      const data = await res.json();
-
-      console.log('[handleDebug] ========== Debug Response ==========');
-      console.log('[handleDebug] Full response:', data);
-
-      if (data.success) {
-        const debug = data.debug;
-        console.log('[handleDebug] ========== Debug Info ==========');
-        console.log('[handleDebug] Message:', debug.message);
-        console.log('[handleDebug] Provider:', debug.provider);
-        console.log('[handleDebug] Duration:', debug.duration);
-        console.log('[handleDebug] Chips:', debug.chips);
-        console.log('[handleDebug] Chips Count:', debug.chipsCount);
-        console.log('[handleDebug] Screen Understanding:', debug.screenUnderstanding);
-        console.log('[handleDebug] Prompt Length:', debug.promptLength);
-        console.log('[handleDebug] Image Size:', debug.imageSize);
-        console.log('[handleDebug] Has API Key:', debug.hasApiKey);
-        console.log('[handleDebug] Timed Out:', debug.timedOut);
-
-        if (debug.error) {
-          console.error('[handleDebug] Error:', debug.error);
-          console.error('[handleDebug] Error Details:', debug.errorDetails);
-        }
-
-        // 格式化显示给用户
-        let resultMessage = `🔍 调试完成\n\n`;
-        resultMessage += `${debug.message}\n\n`;
-        resultMessage += `提供商: ${debug.provider === 'glm' ? 'GLM-4V' : debug.provider}\n`;
-        resultMessage += `耗时: ${debug.duration}\n`;
-
-        if (debug.chips && debug.chips.length > 0) {
-          resultMessage += `\n生成的Chips:\n`;
-          debug.chips.forEach((chip: string, i: number) => {
-            resultMessage += `${i + 1}. ${chip}\n`;
-          });
-        }
-
-        if (debug.error) {
-          resultMessage += `\n❌ 错误: ${debug.error}`;
-        }
-
-        alert(resultMessage);
-      } else {
-        console.error('[handleDebug] Debug failed:', data.error);
-        alert(`❌ 调试失败: ${data.error}`);
-      }
-    } catch (error: unknown) {
-      clearTimeout(timeoutId);
-      console.error('[handleDebug] Request failed:', error);
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        alert('⏱️ 调试超时（65秒）\n\n可能原因：\n1. GLM API响应太慢\n2. 网络不稳定\n3. 图片太大\n\n请查看控制台日志');
-      } else {
-        alert('❌ 调试失败\n\n请检查网络连接');
-      }
-    }
-  };
-
   const selectScreenshot = (index: number) => {
     setSelectedIndexes([index]);
   };
@@ -731,6 +655,15 @@ export default function Home() {
   const displayScreenshots = selectedIndexes.length > 0
     ? selectedIndexes.map(i => screenshots[i]).filter(Boolean)
     : screenshots.slice(0, 3);
+
+  const providerLabel = (p?: string) => {
+    if (!p) return '未知';
+    if (p === 'glm') return 'GLM-4V';
+    if (p === 'minimax') return 'MiniMax';
+    if (p === 'mock') return '模拟数据';
+    if (p === 'cached') return '缓存结果';
+    return p;
+  };
 
   // 显示错误界面
   if (hasError) {
@@ -822,22 +755,6 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 sm:h-8 text-xs sm:text-sm hidden"  // 完全隐藏调试按钮
-                onClick={() => {
-                  if (screenshots.length === 0) {
-                    alert('请先上传截图');
-                    return;
-                  }
-                  handleDebug(screenshots[0].id);
-                }}
-                disabled={screenshots.length === 0}
-              >
-                🔍 调试
-              </Button>
-
               {/* Prompt管理按钮 - 使用FileText图标 */}
               <Dialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen}>
                 <DialogTrigger asChild>
@@ -885,13 +802,29 @@ export default function Home() {
                                 size="sm"
                                 variant="ghost"
                                 onClick={() => {
+                                  setViewingPrompt(prompt);
+                                  setEditingPrompt(null);
+                                  setIsEditingPrompt(false);
+                                  setPromptName('');
+                                  setPromptContent(prompt.content);
+                                }}
+                                className="h-8"
+                              >
+                                查看
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setViewingPrompt(prompt);
                                   setEditingPrompt(prompt);
+                                  setIsEditingPrompt(true);
                                   setPromptName(prompt.name);
                                   setPromptContent(prompt.content);
                                 }}
                                 className="h-8"
                               >
-                                {prompt.id === currentPromptId ? '查看/编辑' : '编辑'}
+                                编辑
                               </Button>
                               {prompt.id !== currentPromptId && (
                                 <Button
@@ -912,46 +845,57 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* 当前使用Prompt的完整内容预览 */}
-                    {editingPrompt && (
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                        <div className="text-sm mb-2">
-                          <span className="font-semibold text-amber-900">正在编辑：</span>
-                          <span className="text-amber-800 ml-1">{editingPrompt.name} ({editingPrompt.version})</span>
+                    {/* 预览/编辑区 */}
+                    <div className="space-y-3 pt-3 border-t border-slate-200">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-slate-900">
+                          {isEditingPrompt
+                            ? (editingPrompt ? `编辑：${editingPrompt.name}` : '新增Prompt')
+                            : `查看：${viewingPrompt?.name || '（未选择）'}`}
+                        </div>
+                        <div className="flex gap-2">
+                          {!isEditingPrompt && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setViewingPrompt(null);
+                                setEditingPrompt(null);
+                                setIsEditingPrompt(true);
+                                setPromptName('');
+                                setPromptContent('');
+                              }}
+                              className="h-8"
+                            >
+                              新增
+                            </Button>
+                          )}
+                          {isEditingPrompt && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setIsEditingPrompt(false);
+                                setEditingPrompt(null);
+                                setPromptName('');
+                                setPromptContent(viewingPrompt?.content || '');
+                              }}
+                              className="h-8 text-slate-600"
+                            >
+                              取消
+                            </Button>
+                          )}
                         </div>
                       </div>
-                    )}
 
-                    {/* 新增/编辑Prompt */}
-                    <div className="space-y-3 pt-3 border-t border-slate-200">
-                      <div className="flex items-center justify-between">
-                        <label className="text-sm font-semibold text-slate-900">
-                          {editingPrompt ? `编辑Prompt - ${editingPrompt.name}` : '新增Prompt'}
-                        </label>
-                        {editingPrompt && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setEditingPrompt(null);
-                              setPromptName('');
-                              setPromptContent('');
-                            }}
-                            className="text-slate-600"
-                          >
-                            <X className="h-3 w-3 mr-1" />
-                            取消编辑
-                          </Button>
-                        )}
-                      </div>
-
-                      {!editingPrompt && (
+                      {/* 新增Prompt需要名称 */}
+                      {isEditingPrompt && !editingPrompt && (
                         <div className="space-y-2">
                           <label className="text-xs font-medium text-slate-700">Prompt名称</label>
                           <Input
                             value={promptName}
                             onChange={(e) => setPromptName(e.target.value)}
-                            placeholder="例如：优化版 v2.0"
+                            placeholder="例如：优化版 v2.1"
                             className="bg-slate-50 border-slate-300"
                           />
                         </div>
@@ -959,36 +903,42 @@ export default function Home() {
 
                       <div className="space-y-2">
                         <label className="text-xs font-medium text-slate-700">
-                          Prompt内容 {editingPrompt && '(当前正在使用)'}
+                          Prompt内容
                         </label>
                         <Textarea
                           value={promptContent}
                           onChange={(e) => setPromptContent(e.target.value)}
                           placeholder="输入完整的Prompt..."
                           rows={12}
-                          className="font-mono text-xs bg-slate-50 border-slate-300"
+                          readOnly={!isEditingPrompt}
+                          className={`font-mono text-xs border-slate-300 ${
+                            isEditingPrompt ? 'bg-slate-50' : 'bg-slate-100'
+                          }`}
                         />
                       </div>
 
-                      <Button
-                        onClick={() => {
-                          if (!promptName.trim() && !editingPrompt) {
-                            alert('请填写名称');
-                            return;
-                          }
-                          if (!promptContent.trim()) {
-                            alert('请填写内容');
-                            return;
-                          }
-                          handleSavePrompt();
-                          setEditingPrompt(null);
-                          setPromptName('');
-                          setPromptContent('');
-                        }}
-                        className="w-full bg-slate-900 hover:bg-slate-800 text-white"
-                      >
-                        {editingPrompt ? '保存修改' : '新增Prompt'}
-                      </Button>
+                      {isEditingPrompt && (
+                        <Button
+                          onClick={() => {
+                            if (!editingPrompt && !promptName.trim()) {
+                              alert('请填写名称');
+                              return;
+                            }
+                            if (!promptContent.trim()) {
+                              alert('请填写内容');
+                              return;
+                            }
+                            handleSavePrompt();
+                            setIsEditingPrompt(false);
+                            setEditingPrompt(null);
+                            // 让用户保存后回到查看态（查看当前选择的prompt）
+                            setPromptName('');
+                          }}
+                          className="w-full bg-slate-900 hover:bg-slate-800 text-white"
+                        >
+                          保存
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </DialogContent>
@@ -1185,7 +1135,9 @@ export default function Home() {
                             ? 'bg-amber-100 text-amber-700 border border-amber-300'
                             : 'bg-green-100 text-green-700 border border-green-300'
                         }`}>
-                          {analyzeMetadata[screenshot.id].usedMockData ? '📝 模拟数据' : '🤖 GLM-4V生成'}
+                          {analyzeMetadata[screenshot.id].usedMockData
+                            ? '📝 模拟数据'
+                            : `🤖 ${providerLabel(analyzeMetadata[screenshot.id].provider)}生成`}
                         </div>
                       )}
 
@@ -1195,9 +1147,14 @@ export default function Home() {
                           result.chips.map((chip, chipIdx) => (
                             <div
                               key={chipIdx}
-                              className="bg-white rounded-2xl px-4 py-3.5 shadow-lg border border-slate-200 hover:border-blue-300 text-sm font-medium text-slate-800 leading-snug text-left cursor-pointer transition-all"
+                              className="bg-white/90 backdrop-blur rounded-2xl px-4 py-3.5 shadow-sm border border-slate-200 hover:border-slate-300 text-sm font-medium text-slate-900 leading-snug text-left cursor-pointer transition-all"
                             >
-                              {chip}
+                              <div className="flex items-start gap-2">
+                                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white text-[10px]">
+                                  Q
+                                </span>
+                                <span className="flex-1">{chip}</span>
+                              </div>
                             </div>
                           ))
                         ) : result ? (
@@ -1231,10 +1188,12 @@ export default function Home() {
                               className="w-full h-14 rounded-2xl bg-blue-600 text-white"
                             >
                               <RefreshCw className="h-5 w-5 mr-2 animate-spin" />
-                              {apiKey ? 'AI分析中...' : '生成中...'}
+                              {apiKey ? '分析中...' : '生成中...'}
                             </Button>
                             <p className="text-xs text-slate-500 text-center">
-                              {apiKey ? '正在调用GLM-4V分析图片（约10-20秒）' : '正在生成模拟数据（约1-3秒）'}
+                              {apiKey
+                                ? `正在调用${providerLabel(provider)}分析图片（约10-20秒）`
+                                : '正在生成模拟数据（约1-3秒）'}
                             </p>
                           </div>
                         ) : (
@@ -1246,17 +1205,12 @@ export default function Home() {
                             disabled={isAnalyzing}
                             className={`w-full h-14 rounded-2xl font-semibold shadow-md transition-all ${
                               result
-                                ? 'bg-white hover:bg-slate-50 text-slate-700 border-2 border-slate-200'
-                                : 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg hover:shadow-xl'
+                                ? 'bg-white hover:bg-slate-50 text-slate-800 border-2 border-slate-200'
+                                : 'bg-slate-900 hover:bg-slate-800 text-white shadow-lg hover:shadow-xl'
                             }`}
                           >
-                            {result ? '↻ 重新生成' : '✨ 生成话题'}
+                            {result ? '重新生成' : '生成话题'}
                           </Button>
-                        )}
-                        {isAnalyzing && (
-                          <p className="text-xs text-slate-500 text-center mt-2">
-                            {provider === 'minimax' ? '正在调用MiniMax分析图片（约10-20秒）' : '正在调用GLM-4V分析图片（约10-20秒）'}
-                          </p>
                         )}
                       </div>
                     </div>
