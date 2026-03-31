@@ -267,7 +267,7 @@ export async function callSiliconFlowVisionAPI(
   const { base64, mimeType } = getImageData(imagePath);
   console.log('[SiliconFlow API] Image mimeType:', mimeType, 'base64 length:', base64.length);
 
-  const response = await fetch('https://api.siliconflow.com/v1/chat/completions', {
+  const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
