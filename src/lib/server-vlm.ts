@@ -36,6 +36,10 @@ interface VLMResult {
   chips: string[];
 }
 
+interface InnerOSResult {
+  innerOS: string;
+}
+
 function parseVLMResponse(raw: string): VLMResult {
   console.log('[parseVLMResponse] Raw length:', raw.length);
   console.log('[parseVLMResponse] Raw content:', raw.substring(0, 800));
@@ -248,4 +252,162 @@ export async function callGLMVisionAPI(
   }
 
   return parseVLMResponse(content);
+}
+
+// ── 内心OS生成函数 ──
+
+/**
+ * 解析内心OS响应（纯文本或简单JSON）
+ */
+function parseInnerOSResponse(raw: string): InnerOSResult {
+  console.log('[parseInnerOSResponse] Raw length:', raw.length);
+  console.log('[parseInnerOSResponse] Raw content:', raw.substring(0, 300));
+
+  let content = raw.trim();
+
+  // 移除可能的markdown代码块
+  content = content.replace(/^```(?:text)?\s*\n?/gm, '').replace(/\n?```\s*$/gm, '').trim();
+
+  // 尝试解析JSON格式
+  if (content.startsWith('{') && content.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(content);
+      const innerOS = typeof parsed.inner_os === 'string' ? parsed.inner_os :
+                      typeof parsed.innerOS === 'string' ? parsed.innerOS :
+                      typeof parsed.text === 'string' ? parsed.text : '';
+      if (innerOS) {
+        console.log('[parseInnerOSResponse] JSON parsed:', innerOS);
+        return { innerOS };
+      }
+    } catch {
+      // JSON解析失败，继续用文本解析
+    }
+  }
+
+  // 文本解析：移除引号、换行，取前100字
+  const osText = content
+    .replace(/^["'「『]|["'」』]$/g, '') // 移除首尾引号
+    .replace(/\n+/g, ' ') // 换行转空格
+    .trim()
+    .substring(0, 100);
+
+  // 如果为空或不符合长度要求，返回空字符串
+  if (osText.length < 5) {
+    console.log('[parseInnerOSResponse] Text too short or empty');
+    return { innerOS: '' };
+  }
+
+  console.log('[parseInnerOSResponse] Text parsed:', osText);
+  return { innerOS: osText };
+}
+
+/**
+ * 组合内心OS的Prompt（不需要JSON后缀，因为OS返回纯文本）
+ */
+function composeInnerOSPrompt(userPrompt: string): string {
+  return userPrompt.trimEnd();
+}
+
+/**
+ * 调用MiniMax Vision API生成内心OS
+ */
+export async function callMiniMaxVisionAPIForOS(
+  imagePath: string,
+  prompt: string,
+  apiKey: string
+): Promise<InnerOSResult> {
+  console.log('[MiniMax OS API] Starting call');
+
+  const { base64, mimeType } = getImageData(imagePath);
+  console.log('[MiniMax OS API] Image mimeType:', mimeType, 'base64 length:', base64.length);
+
+  const response = await fetch('https://api.minimaxi.com/anthropic/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 300,
+      temperature: 0.7, // OS生成需要更高的创造性
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+          { type: 'text', text: composeInnerOSPrompt(prompt) }
+        ]
+      }]
+    })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('[MiniMax OS API] HTTP', response.status, errText);
+    // OS生成失败时返回空字符串，不影响整体流程
+    return { innerOS: '' };
+  }
+
+  const data = await response.json();
+  const content = data.content?.[0]?.text || '';
+  console.log('[MiniMax OS API] Raw response:', content.substring(0, 200));
+
+  return parseInnerOSResponse(content);
+}
+
+/**
+ * 调用GLM Vision API生成内心OS
+ */
+export async function callGLMVisionAPIForOS(
+  imagePath: string,
+  prompt: string,
+  apiKey: string
+): Promise<InnerOSResult> {
+  const startTime = Date.now();
+  console.log('[GLM OS API] Starting call');
+
+  const { base64, mimeType } = getImageData(imagePath);
+  console.log('[GLM OS API] Image mimeType:', mimeType, 'base64 length:', base64.length);
+
+  const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'glm-4v-flash',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: composeInnerOSPrompt(prompt) },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
+        ]
+      }],
+      max_tokens: 300,
+      temperature: 0.7 // OS生成需要更高的创造性
+    })
+  });
+
+  const elapsed = Date.now() - startTime;
+  console.log('[GLM OS API] Response in', elapsed, 'ms, status:', response.status);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('[GLM OS API] HTTP', response.status, errText);
+    // OS生成失败时返回空字符串，不影响整体流程
+    return { innerOS: '' };
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || '';
+  console.log('[GLM OS API] Raw response:', content.substring(0, 200));
+
+  if (!content) {
+    console.log('[GLM OS API] Empty response, returning empty OS');
+    return { innerOS: '' };
+  }
+
+  return parseInnerOSResponse(content);
 }

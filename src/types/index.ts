@@ -25,6 +25,16 @@ export interface PromptTemplate {
   content: string;
   createdAt: Date;
   isDefault: boolean;
+  type?: 'chips' | 'inner-os'; // Prompt类型
+}
+
+// 内心OS结果
+export interface InnerOSResult {
+  screenshotId: string;
+  promptVersion: string;
+  promptName: string;
+  generatedAt: Date;
+  innerOS: string;
 }
 
 // 导出数据
@@ -38,6 +48,12 @@ export interface ExportData {
 export interface AnalyzeResponse {
   success: boolean;
   data?: ChipResult;
+  error?: string;
+}
+
+export interface InnerOSResponse {
+  success: boolean;
+  data?: InnerOSResult;
   error?: string;
 }
 

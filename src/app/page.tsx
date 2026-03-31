@@ -21,7 +21,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Upload, Download, RefreshCw, Settings, Plus, X, ChevronLeft, ChevronRight, AlertCircle, Loader2, FileText } from 'lucide-react';
-import { Screenshot, ChipResult, PromptTemplate } from '@/types';
+import { Screenshot, ChipResult, PromptTemplate, InnerOSResult } from '@/types';
 import { QRCodeButton } from '@/components/qrcode-button';
 import { compressImage } from '@/lib/image-compress';
 
@@ -41,11 +41,13 @@ interface AnalyzeMetadata {
 export default function Home() {
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [results, setResults] = useState<Record<string, ChipResult>>({});
+  const [innerOSResults, setInnerOSResults] = useState<Record<string, InnerOSResult>>({});
   const [analyzeMetadata, setAnalyzeMetadata] = useState<Record<string, AnalyzeMetadata>>({});
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
   const [currentPromptId, setCurrentPromptId] = useState<string>('');
   const [selectedIndexes, setSelectedIndexes] = useState<number[]>([]);
   const [analyzing, setAnalyzing] = useState<Record<string, boolean>>({});
+  const [generatingOS, setGeneratingOS] = useState<Record<string, boolean>>({});
   const [apiKey, setApiKey] = useState('');
   const [provider, setProvider] = useState<'glm' | 'minimax'>('glm');
   const [testingApi, setTestingApi] = useState(false);
@@ -415,44 +417,75 @@ export default function Home() {
     }
 
     setAnalyzing(prev => ({ ...prev, [screenshotId]: true }));
+    setGeneratingOS(prev => ({ ...prev, [screenshotId]: true }));
 
     const screenshot = screenshots.find(s => s.id === screenshotId);
 
     try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          screenshotId,
-          apiKey,
-          provider,
-          imageData: screenshot?.imagePath,
-          filename: screenshot?.filename,
+      // 并行调用chips和OS生成
+      const [chipsResponse, osResponse] = await Promise.allSettled([
+        fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            screenshotId,
+            apiKey,
+            provider,
+            imageData: screenshot?.imagePath,
+            filename: screenshot?.filename,
+          }),
         }),
-      });
+        fetch('/api/inner-os', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            screenshotId,
+            apiKey,
+            provider,
+          }),
+        })
+      ]);
 
-      const data = await res.json();
+      // 处理chips结果
+      if (chipsResponse.status === 'fulfilled') {
+        const data = await chipsResponse.value.json();
 
-      if (!res.ok || !data.success) {
-        alert(`生成失败: ${data.error || `HTTP ${res.status}`}`);
-        return;
+        if (!chipsResponse.value.ok || !data.success) {
+          alert(`生成话题失败: ${data.error || `HTTP ${chipsResponse.value.status}`}`);
+        } else if (!data.data?.chips || !Array.isArray(data.data.chips)) {
+          alert('生成失败：返回数据格式错误');
+        } else {
+          setResults(prev => ({ ...prev, [screenshotId]: data.data }));
+
+          if (data.metadata) {
+            setAnalyzeMetadata(prev => ({ ...prev, [screenshotId]: data.metadata }));
+          }
+        }
+      } else {
+        console.error('[handleAnalyze] Chips request failed:', chipsResponse.reason);
+        alert('生成话题失败，请检查网络连接');
       }
 
-      if (!data.data?.chips || !Array.isArray(data.data.chips)) {
-        alert('生成失败：返回数据格式错误');
-        return;
+      // 处理OS结果（失败不影响整体）
+      if (osResponse.status === 'fulfilled') {
+        const data = await osResponse.value.json();
+
+        if (osResponse.value.ok && data.success && data.data?.innerOS) {
+          setInnerOSResults(prev => ({ ...prev, [screenshotId]: data.data }));
+          console.log('[handleAnalyze] OS generated:', data.data.innerOS);
+        } else {
+          console.log('[handleAnalyze] OS generation returned non-success or empty:', data);
+        }
+      } else {
+        console.log('[handleAnalyze] OS request failed (non-fatal):', osResponse.reason);
       }
 
-      setResults(prev => ({ ...prev, [screenshotId]: data.data }));
-
-      if (data.metadata) {
-        setAnalyzeMetadata(prev => ({ ...prev, [screenshotId]: data.metadata }));
-      }
     } catch (error) {
       console.error('[handleAnalyze] Request failed:', error);
       alert('生成失败，请检查网络连接');
     } finally {
       setAnalyzing(prev => ({ ...prev, [screenshotId]: false }));
+      setGeneratingOS(prev => ({ ...prev, [screenshotId]: false }));
     }
   };
 
@@ -464,6 +497,11 @@ export default function Home() {
         const newResults = { ...prev };
         delete newResults[id];
         return newResults;
+      });
+      setInnerOSResults(prev => {
+        const newOSResults = { ...prev };
+        delete newOSResults[id];
+        return newOSResults;
       });
       setSelectedIndexes([]);
     } catch (error) {
@@ -1049,7 +1087,10 @@ export default function Home() {
       </header>
 
       {/* 主内容区 - 截图预览 */}
-      <main className="container mx-auto px-2 sm:px-4" style={{ marginTop: '4.5rem', marginBottom: '5rem' }}>
+      <main
+        className="container mx-auto px-2 sm:px-4 pb-28 sm:pb-24"
+        style={{ marginTop: '4.5rem' }}
+      >
         {screenshots.length === 0 ? (
           // 空状态
           <div className="min-h-[50vh] sm:min-h-[60vh] flex items-center justify-center">
@@ -1081,8 +1122,8 @@ export default function Home() {
             </Card>
           </div>
         ) : (
-          // 截图展示区 - 移动端垂直排列，桌面端水平
-          <div className="flex items-center justify-center gap-4 sm:gap-6 overflow-x-auto pb-4 flex-col sm:flex-row">
+          // 截图展示区：移动端上图下文（chips 全宽可读）；桌面端左图右栏（chips 足够宽度）
+          <div className="flex w-full max-w-[min(100%,520px)] sm:max-w-none mx-auto flex-col items-stretch justify-center gap-4 sm:gap-6 sm:flex-row sm:items-start sm:justify-center pb-4 px-1">
             {displayScreenshots.map((screenshot) => {
               const result = results[screenshot.id];
               const isAnalyzing = analyzing[screenshot.id];
@@ -1090,89 +1131,100 @@ export default function Home() {
               return (
                 <div
                   key={screenshot.id}
-                  className="flex-shrink-0 relative group"
+                  className="relative group w-full sm:w-auto sm:max-w-5xl"
                 >
-                  {/* 图片+信息区域 容器 - 移动端垂直，桌面端水平 */}
-                  <div className="flex flex-col sm:flex-row shadow-xl rounded-2xl overflow-hidden">
+                  <div className="flex flex-col sm:flex-row shadow-xl rounded-2xl border border-slate-200/80 bg-white overflow-visible">
                     {/* 主体图片 */}
-                    <div className="relative w-full sm:w-[240px] h-[300px] sm:h-[428px] bg-muted flex items-center justify-center">
+                    <div className="relative w-full sm:w-[min(260px,42vw)] sm:max-w-[280px] shrink-0 aspect-[9/16] max-h-[min(72vh,520px)] sm:max-h-[min(85vh,560px)] bg-slate-100 flex items-center justify-center rounded-t-2xl sm:rounded-l-2xl sm:rounded-tr-none">
                       <img
                         src={screenshot.imagePath}
                         alt={screenshot.filename}
-                        className="max-w-full max-h-full object-contain"
+                        className="h-full w-full object-contain"
                       />
 
-                      {/* 删除按钮 - 悬浮显示 */}
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDelete(screenshot.id);
                         }}
-                        className="absolute top-2 sm:top-3 right-2 sm:right-3 h-7 w-7 sm:h-8 sm:w-8 bg-black/70 hover:bg-red-600 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-all"
+                        className="absolute top-2 sm:top-3 right-2 sm:right-3 h-8 w-8 bg-black/60 hover:bg-red-600 rounded-full flex items-center justify-center text-white sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                        aria-label="删除"
                       >
-                        <X className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <X className="h-4 w-4" />
                       </button>
 
-                      {/* 完成标记 */}
                       {result && (
-                        <div className="absolute top-2 sm:top-3 left-2 sm:left-3 h-7 w-7 sm:h-8 sm:w-8 bg-green-500 rounded-full flex items-center justify-center text-white shadow-lg">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="absolute top-2 sm:top-3 left-2 sm:left-3 h-8 w-8 bg-emerald-500 rounded-full flex items-center justify-center text-white shadow-md">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                           </svg>
                         </div>
                       )}
                     </div>
 
-                    {/* 右侧矩形区域 */}
-                    <div className="w-full sm:w-[120px] h-[280px] sm:h-[428px] bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col p-3 sm:p-4">
-                      {/* 数据来源标记 */}
+                    {/* 话题区：全宽可读，不裁切文字 */}
+                    <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col bg-gradient-to-b from-slate-50 to-slate-100 p-4 sm:min-w-[280px] sm:max-w-[min(100%,380px)] sm:rounded-r-2xl rounded-b-2xl sm:rounded-bl-none">
                       {result && result.chips && result.chips.length > 0 && analyzeMetadata[screenshot.id] && (
-                        <div className={`mb-2 px-2 py-1 rounded text-xs text-center ${
-                          analyzeMetadata[screenshot.id].usedMockData
-                            ? 'bg-amber-100 text-amber-700 border border-amber-300'
-                            : 'bg-green-100 text-green-700 border border-green-300'
-                        }`}>
+                        <div
+                          className={`mb-3 shrink-0 rounded-lg px-2.5 py-1.5 text-center text-xs ${
+                            analyzeMetadata[screenshot.id].usedMockData
+                              ? 'border border-amber-300 bg-amber-100 text-amber-800'
+                              : 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+                          }`}
+                        >
                           {analyzeMetadata[screenshot.id].usedMockData
-                            ? '📝 模拟数据'
-                            : `🤖 ${providerLabel(analyzeMetadata[screenshot.id].provider)}生成`}
+                            ? '模拟数据'
+                            : `${providerLabel(analyzeMetadata[screenshot.id].provider)} 生成`}
                         </div>
                       )}
 
-                      {/* 上方：chips展示区（占据大部分空间） */}
-                      <div className="flex-1 flex flex-col justify-end space-y-2.5 mb-4">
+                      {/* AI内心OS区域 */}
+                      {innerOSResults[screenshot.id]?.innerOS && (
+                        <div className="mb-3 shrink-0 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5">
+                          <div className="flex items-start gap-2">
+                            <span className="text-violet-500 text-sm">🤔</span>
+                            <p className="flex-1 text-sm text-violet-900 leading-relaxed">
+                              {innerOSResults[screenshot.id].innerOS}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 正在生成OS时的加载状态 */}
+                      {generatingOS[screenshot.id] && !innerOSResults[screenshot.id]?.innerOS && (
+                        <div className="mb-3 shrink-0 rounded-xl border border-violet-200 bg-violet-50/50 px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <Loader2 className="h-4 w-4 text-violet-400 animate-spin" />
+                            <p className="text-xs text-violet-600">AI正在思考...</p>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="space-y-3 sm:min-h-0 sm:flex-1 sm:max-h-[min(70vh,520px)] sm:overflow-y-auto">
                         {result && result.chips && result.chips.length > 0 ? (
                           result.chips.map((chip, chipIdx) => (
                             <div
                               key={chipIdx}
-                              className="bg-white/90 backdrop-blur rounded-2xl px-4 py-3.5 shadow-sm border border-slate-200 hover:border-slate-300 text-sm font-medium text-slate-900 leading-snug text-left cursor-pointer transition-all"
+                              className="break-words rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-left text-sm font-medium leading-relaxed text-slate-900 shadow-sm"
                             >
-                              <div className="flex items-start gap-2">
-                                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white text-[10px]">
-                                  Q
-                                </span>
-                                <span className="flex-1">{chip}</span>
-                              </div>
+                              {chip}
                             </div>
                           ))
                         ) : result ? (
-                          <div className="h-full flex items-center justify-center">
-                            <div className="text-center text-slate-400 text-sm">
-                              <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                              未生成问题<br/>请重新生成
-                            </div>
+                          <div className="flex flex-col items-center justify-center py-8 text-center text-slate-400 text-sm">
+                            <AlertCircle className="mb-2 h-8 w-8 opacity-30" />
+                            未生成问题，请重新生成
                           </div>
                         ) : (
-                          <div className="h-full flex items-center justify-center">
-                            <div className="text-center text-slate-400 text-sm">
-                              <RefreshCw className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                              点击生成<br/>分析图片
-                            </div>
+                          <div className="flex flex-col items-center justify-center py-8 text-center text-slate-400 text-sm">
+                            <RefreshCw className="mb-2 h-8 w-8 opacity-30" />
+                            点击下方按钮生成话题
                           </div>
                         )}
                       </div>
 
-                      {/* 下方：生成按钮 */}
-                      <div>
+                      <div className="mt-4 shrink-0 pt-1">
                         {!apiKey && !result && (
                           <div className="mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 text-center">
                             💡 未配置API Key，将使用模拟数据
@@ -1221,8 +1273,8 @@ export default function Home() {
 
       {/* 底部图片轴 - 类似相册 */}
       {screenshots.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-card border-t z-40">
-          <div className="container mx-auto px-4 py-2">
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-card pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div className="container mx-auto px-2 py-2 sm:px-4">
               <div className="flex items-center gap-2">
                 {/* 左箭头 */}
                 <Button
