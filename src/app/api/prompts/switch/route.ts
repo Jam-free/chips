@@ -63,7 +63,7 @@ export async function PUT(request: NextRequest) {
             promptName: currentPrompt.name,
             generatedAt: new Date(),
             screenUnderstanding: '未配置API Key，使用模拟数据',
-            chips: ['这个功能怎么用？', '有什么设置选项？']
+            chips: ['这个功能入口在哪？', '和同类比差在哪？', '下一步该怎么选？']
           };
           dataStore.addResult(chipResult);
           results.push({ screenshotId: screenshot.id, cached: false });

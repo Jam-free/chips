@@ -535,14 +535,11 @@ export default function Home() {
 
   // 验证prompt内容是否有效
   const validatePrompt = (content: string): { isValid: boolean; error: string } => {
-    if (!content || content.trim().length < 100) {
-      return { isValid: false, error: 'Prompt内容不能少于100字' };
+    if (!content || content.trim().length < 30) {
+      return { isValid: false, error: 'Prompt内容不能少于30字' };
     }
     if (content.length > 10000) {
       return { isValid: false, error: 'Prompt内容不能超过10000字' };
-    }
-    if (!content.includes('screen_briefing') || !content.includes('chips')) {
-      return { isValid: false, error: 'Prompt必须包含输出格式说明（screen_briefing和chips字段）' };
     }
     return { isValid: true, error: '' };
   };

@@ -1,5 +1,21 @@
 // 服务器端VLM调用函数（只能在API路由中使用）
 
+/**
+ * 自动追加在「用户 Prompt」之后，用于程序解析；编辑 Prompt 时无需手写 JSON/输出格式。
+ */
+const VLM_JSON_SUFFIX = `
+
+【系统解析（自动追加，勿重复写入你的 Prompt）】
+请仅输出一段合法 JSON，不要 Markdown 代码块、不要任何其他文字。
+字段说明：
+- screen_briefing：字符串，一句话概括当前用户状态与屏幕核心信息。
+- chips：字符串数组，至多 3 条；每条为疑问句并以「？」结尾；若判定不可生成（如边界规则），则 chips 为 []，并在 screen_briefing 中简要说明原因。
+`;
+
+function composeVlmPrompt(userPrompt: string): string {
+  return userPrompt.trimEnd() + VLM_JSON_SUFFIX;
+}
+
 interface ImageData {
   base64: string;
   mimeType: string;
@@ -56,7 +72,7 @@ function parseVLMResponse(raw: string): VLMResult {
       const chips = parsed
         .map((c: unknown) => (typeof c === 'string' ? c : (c as { text?: string })?.text))
         .filter((s): s is string => typeof s === 'string' && s.length > 2)
-        .slice(0, 2);
+        .slice(0, 3);
       if (chips.length > 0) {
         return { screenUnderstanding: '已分析屏幕内容', chips };
       }
@@ -97,9 +113,11 @@ function extractFromParsed(parsed: unknown): VLMResult | null {
       return null;
     })
     .filter((s): s is string => typeof s === 'string' && s.length > 1)
-    .slice(0, 2);
+    .slice(0, 3);
 
-  if (chips.length === 0) return null;
+  if (chips.length === 0) {
+    return { screenUnderstanding, chips: [] };
+  }
 
   console.log('[extractFromParsed] Success:', { screenUnderstanding, chips });
   return { screenUnderstanding, chips };
@@ -132,7 +150,7 @@ function extractQuestionsFromText(text: string): string[] {
     }
   }
 
-  return [...new Set(questions)].slice(0, 2);
+  return [...new Set(questions)].slice(0, 3);
 }
 
 // ── MiniMax Vision API ──
@@ -161,7 +179,7 @@ export async function callMiniMaxVisionAPI(
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
-          { type: 'text', text: prompt }
+          { type: 'text', text: composeVlmPrompt(prompt) }
         ]
       }]
     })
@@ -203,7 +221,7 @@ export async function callGLMVisionAPI(
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: prompt },
+          { type: 'text', text: composeVlmPrompt(prompt) },
           { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
         ]
       }],

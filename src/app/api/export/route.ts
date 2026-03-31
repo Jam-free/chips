@@ -32,7 +32,8 @@ export async function GET(request: NextRequest) {
         '生成时间': result?.generatedAt.toLocaleString('zh-CN') || '',
         '屏幕理解': result?.screenUnderstanding || '',
         '话题Chip 1': result?.chips[0] || '',
-        '话题Chip 2': result?.chips[1] || ''
+        '话题Chip 2': result?.chips[1] || '',
+        '话题Chip 3': result?.chips[2] || ''
       };
     });
 

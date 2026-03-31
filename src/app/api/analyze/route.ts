@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
     if (!apiKey) {
       await new Promise(resolve => setTimeout(resolve, 800));
       screenUnderstanding = '未配置API Key，使用模拟数据';
-      chips = ['这个功能怎么用？', '有什么设置选项？'];
+      chips = ['这个功能入口在哪？', '和同类比差在哪？', '下一步该怎么选？'];
       usedMockData = true;
     } else {
       console.log('[Analyze] Calling VLM:', provider);
