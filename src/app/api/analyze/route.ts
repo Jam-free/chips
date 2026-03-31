@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { callMiniMaxVisionAPI, callGLMVisionAPI } from '@/lib/server-vlm';
+import { callMiniMaxVisionAPI, callGLMVisionAPI, callSiliconFlowVisionAPI } from '@/lib/server-vlm';
 import { dataStore } from '@/lib/store';
 import { ChipResult, Screenshot } from '@/types';
 
@@ -26,6 +26,8 @@ export async function POST(request: NextRequest) {
       try {
         if (provider === 'minimax') {
           await callMiniMaxVisionAPI(testImage, '测试：请简单描述这张图片', apiKey);
+        } else if (provider === 'siliconflow') {
+          await callSiliconFlowVisionAPI(testImage, '测试：请简单描述这张图片', apiKey);
         } else {
           await callGLMVisionAPI(testImage, '测试：请简单描述这张图片', apiKey);
         }
@@ -94,9 +96,12 @@ export async function POST(request: NextRequest) {
       const callStart = Date.now();
 
       try {
-        const result = provider === 'minimax'
-          ? await callMiniMaxVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
-          : await callGLMVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
+        const result =
+          provider === 'minimax'
+            ? await callMiniMaxVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
+            : provider === 'siliconflow'
+              ? await callSiliconFlowVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
+              : await callGLMVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
 
         screenUnderstanding = result.screenUnderstanding;
         chips = result.chips;

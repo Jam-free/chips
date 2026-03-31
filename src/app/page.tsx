@@ -49,7 +49,7 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState<Record<string, boolean>>({});
   const [generatingOS, setGeneratingOS] = useState<Record<string, boolean>>({});
   const [apiKey, setApiKey] = useState('');
-  const [provider, setProvider] = useState<'glm' | 'minimax'>('glm');
+  const [provider, setProvider] = useState<'glm' | 'minimax' | 'siliconflow'>('glm');
   const [testingApi, setTestingApi] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -206,13 +206,16 @@ export default function Home() {
       const data = await res.json();
 
       // 如果localStorage没有配置，但服务器有，则使用服务器的
-      if (!savedKey && (data.glmKey || data.minimaxKey)) {
+      if (!savedKey && (data.glmKey || data.minimaxKey || data.siliconflowKey)) {
         if (data.glmKey) {
           setApiKey(data.glmKey);
           setProvider('glm');
         } else if (data.minimaxKey) {
           setApiKey(data.minimaxKey);
           setProvider('minimax');
+        } else if (data.siliconflowKey) {
+          setApiKey(data.siliconflowKey);
+          setProvider('siliconflow');
         }
       }
     } catch (error) {
@@ -695,6 +698,7 @@ export default function Home() {
     if (!p) return '未知';
     if (p === 'glm') return 'GLM-4V';
     if (p === 'minimax') return 'MiniMax';
+    if (p === 'siliconflow') return '硅基流动(Qwen3-VL)';
     if (p === 'mock') return '模拟数据';
     if (p === 'cached') return '缓存结果';
     return p;
@@ -1019,7 +1023,7 @@ export default function Home() {
                       <label className="text-sm font-semibold text-slate-900 block">
                         VLM提供商
                       </label>
-                      <Select value={provider} onValueChange={(v: 'glm' | 'minimax') => setProvider(v)}>
+                      <Select value={provider} onValueChange={(v: 'glm' | 'minimax' | 'siliconflow') => setProvider(v)}>
                         <SelectTrigger className="bg-slate-50 border-slate-300 text-slate-900">
                           <SelectValue placeholder="选择提供商" />
                         </SelectTrigger>
@@ -1029,6 +1033,9 @@ export default function Home() {
                           </SelectItem>
                           <SelectItem value="minimax" className="text-slate-900 focus:bg-slate-100">
                             MiniMax VL
+                          </SelectItem>
+                          <SelectItem value="siliconflow" className="text-slate-900 focus:bg-slate-100">
+                            硅基流动（Qwen3-VL-8B）
                           </SelectItem>
                         </SelectContent>
                       </Select>

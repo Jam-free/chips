@@ -254,6 +254,60 @@ export async function callGLMVisionAPI(
   return parseVLMResponse(content);
 }
 
+// ── SiliconFlow (OpenAI-compatible) Vision API ──
+export async function callSiliconFlowVisionAPI(
+  imagePath: string,
+  prompt: string,
+  apiKey: string,
+  model: string = 'Qwen/Qwen3-VL-8B-Instruct'
+): Promise<VLMResult> {
+  const startTime = Date.now();
+  console.log('[SiliconFlow API] Starting call, model:', model);
+
+  const { base64, mimeType } = getImageData(imagePath);
+  console.log('[SiliconFlow API] Image mimeType:', mimeType, 'base64 length:', base64.length);
+
+  const response = await fetch('https://api.siliconflow.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}`, detail: 'low' } },
+            { type: 'text', text: composeVlmPrompt(prompt) }
+          ]
+        }
+      ],
+      max_tokens: 1024,
+      temperature: 0.3
+    })
+  });
+
+  console.log('[SiliconFlow API] Response in', Date.now() - startTime, 'ms, status:', response.status);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('[SiliconFlow API] HTTP', response.status, errText);
+    throw new Error(`SiliconFlow API ${response.status}: ${errText.substring(0, 300)}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || '';
+  console.log('[SiliconFlow API] Raw response:', String(content).substring(0, 500));
+
+  if (!content) {
+    throw new Error('SiliconFlow API 返回空内容');
+  }
+
+  return parseVLMResponse(String(content));
+}
+
 // ── 内心OS生成函数 ──
 
 /**

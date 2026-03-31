@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dataStore } from '@/lib/store';
-import { callGLMVisionAPI, callMiniMaxVisionAPI } from '@/lib/server-vlm';
+import { callGLMVisionAPI, callMiniMaxVisionAPI, callSiliconFlowVisionAPI } from '@/lib/server-vlm';
 import { ChipResult } from '@/types';
 
 // POST - 切换prompt
@@ -41,9 +41,12 @@ export async function PUT(request: NextRequest) {
       // 不使用缓存，强制重新生成
       try {
         if (apiKey) {
-          const vlmResult = provider === 'minimax'
-            ? await callMiniMaxVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
-            : await callGLMVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
+          const vlmResult =
+            provider === 'minimax'
+              ? await callMiniMaxVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
+              : provider === 'siliconflow'
+                ? await callSiliconFlowVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey)
+                : await callGLMVisionAPI(screenshot.imagePath, currentPrompt.content, apiKey);
 
           const chipResult: ChipResult = {
             screenshotId: screenshot.id,
